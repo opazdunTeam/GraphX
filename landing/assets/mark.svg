@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title desc">
+  <title id="title">Проверка контрагента</title>
+  <desc id="desc">Связанные точки на временной шкале</desc>
+  <defs>
+    <linearGradient id="bg" x1="6" y1="4" x2="42" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#6D5CE7"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="13" fill="#101828"/>
+  <path d="M13 16.5 24 11l11 6.5v13L24 37l-11-6.5v-14Z" fill="url(#bg)" fill-opacity=".22" stroke="#8FB4FF" stroke-width="1.5"/>
+  <path d="m15.5 28 8.5-8 8.5 5.5M24 20v12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="15.5" cy="28" r="3.2" fill="#fff"/>
+  <circle cx="24" cy="20" r="3.2" fill="#fff"/>
+  <circle cx="32.5" cy="25.5" r="3.2" fill="#fff"/>
+  <circle cx="24" cy="32" r="2.3" fill="#BFD3FF"/>
+</svg>

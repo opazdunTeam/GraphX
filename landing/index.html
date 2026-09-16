@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Платформа для поиска, проверки и объяснения связей между людьми и компаниями с учётом времени и источников.">
+    <meta name="theme-color" content="#101828">
+    <title>Проверка контрагента — связи, источники, история</title>
+    <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Перейти к содержанию</a>
+
+    <header class="site-header" data-header>
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="Проверка контрагента — на главную">
+          <img src="assets/mark.svg" alt="" width="44" height="44">
+          <span class="brand-copy">
+            <strong>Проверка контрагента</strong>
+            <span>аналитическая платформа</span>
+          </span>
+        </a>
+
+        <button class="menu-button" type="button" aria-expanded="false" aria-controls="main-navigation" data-menu-button>
+          <span class="menu-button-label">Меню</span>
+          <span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+        </button>
+
+        <nav class="main-navigation" id="main-navigation" aria-label="Основная навигация" data-navigation>
+          <a href="#capabilities">Возможности</a>
+          <a href="#workflow">Как это работает</a>
+          <a href="#principles">Принципы</a>
+          <a href="#audience">Для кого</a>
+          <a class="button button-small button-dark" href="#demo">Посмотреть концепцию</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-glow hero-glow-left" aria-hidden="true"></div>
+        <div class="hero-glow hero-glow-right" aria-hidden="true"></div>
+        <div class="container hero-grid">
+          <div class="hero-copy reveal">
+            <div class="eyebrow"><span></span> Проверка без разрозненных вкладок</div>
+            <h1>Связи, источники и история контрагента — <em>в одной картине</em></h1>
+            <p class="hero-lead">Платформа собирает открытые сведения о людях и компаниях, сопоставляет записи и объясняет, как менялись их связи во времени.</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#workflow">Как проходит проверка <span aria-hidden="true">→</span></a>
+              <a class="button button-secondary" href="#capabilities">Изучить возможности</a>
+            </div>
+            <ul class="hero-points" aria-label="Основные преимущества">
+              <li><span class="check" aria-hidden="true">✓</span> Каждый факт связан с источником</li>
+              <li><span class="check" aria-hidden="true">✓</span> Неоднозначность остаётся видимой</li>
+            </ul>
+          </div>
+
+          <div class="product-preview reveal reveal-delay" role="group" aria-label="Пример результата проверки">
+            <div class="preview-window">
+              <div class="preview-topbar">
+                <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+                <span class="preview-title">Результат проверки</span>
+                <span class="preview-status"><i></i> источники обработаны</span>
+              </div>
+              <div class="preview-body">
+                <div class="person-card">
+                  <div class="person-avatar" aria-hidden="true">АТ</div>
+                  <div>
+                    <span class="overline">Исходный объект</span>
+                    <h2>Александр Тимофеев</h2>
+                    <p>Казахстан · варианты имени: 4</p>
+                  </div>
+                  <span class="confidence"><i></i> подтверждено</span>
+                </div>
+
+                <div class="preview-content">
+                  <aside class="mini-sidebar" aria-hidden="true">
+                    <span class="active"></span><span></span><span></span><span></span>
+                  </aside>
+                  <div class="timeline-panel">
+                    <div class="panel-heading">
+                      <div><span class="overline">История связей</span><strong>Временная шкала</strong></div>
+                      <span class="source-count">5 источников</span>
+                    </div>
+                    <div class="timeline">
+                      <div class="timeline-row">
+                        <time>2014</time><span class="timeline-dot purple"></span>
+                        <div class="event-card"><strong>АО «Север»</strong><span>Член совета директоров</span><small><i class="source-icon"></i> Раскрытие эмитента</small></div>
+                      </div>
+                      <div class="timeline-row">
+                        <time>2019</time><span class="timeline-dot blue"></span>
+                        <div class="event-card"><strong>ТОО «Вектор»</strong><span>Руководитель</span><small><i class="source-icon"></i> Официальный реестр</small></div>
+                      </div>
+                      <div class="timeline-row muted-row">
+                        <time>2023</time><span class="timeline-dot amber"></span>
+                        <div class="event-card"><strong>Возможная связь</strong><span>Общий адрес с двумя организациями</span><small><i class="source-icon"></i> Требует проверки</small></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="floating-note note-sources">
+              <span class="note-icon">↗</span><div><strong>5 источников</strong><small>в одном исследовании</small></div>
+            </div>
+            <div class="floating-note note-history">
+              <span class="note-icon purple-icon">◷</span><div><strong>Учёт времени</strong><small>для должностей и связей</small></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="source-strip" aria-label="Планируемые источники данных">
+        <div class="container source-strip-inner">
+          <p>Планируемые источники</p>
+          <div class="source-list">
+            <span>ICIJ</span><span>OpenSanctions</span><span>OpenCorporates</span><span>КГД</span><span>KASE</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section problem-section">
+        <div class="container">
+          <div class="section-heading centered reveal">
+            <span class="section-label">Проблема</span>
+            <h2>Проверка не должна начинаться с десятков разрозненных сайтов</h2>
+            <p>Сегодня аналитик вручную повторяет одни и те же запросы, сводит варианты имён и пытается восстановить последовательность событий.</p>
+          </div>
+          <div class="problem-grid">
+            <article class="problem-card reveal">
+              <span class="card-number">01</span><div class="card-icon search-icon" aria-hidden="true"></div>
+              <h3>Данные разбросаны</h3>
+              <p>Реестры, биржевые раскрытия, санкционные списки и документы существуют отдельно друг от друга.</p>
+            </article>
+            <article class="problem-card reveal reveal-delay-short">
+              <span class="card-number">02</span><div class="card-icon identity-icon" aria-hidden="true"></div>
+              <h3>Имена не совпадают</h3>
+              <p>Кириллица, латиница, инициалы и разные транслитерации мешают найти все относящиеся к человеку записи.</p>
+            </article>
+            <article class="problem-card reveal reveal-delay">
+              <span class="card-number">03</span><div class="card-icon history-icon" aria-hidden="true"></div>
+              <h3>История теряется</h3>
+              <p>Текущая карточка компании редко объясняет, кто и когда занимал должность или владел долей.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section capabilities-section" id="capabilities">
+        <div class="container">
+          <div class="section-heading heading-split reveal">
+            <div><span class="section-label">Возможности</span><h2>От исходного имени — к проверяемой картине</h2></div>
+            <p>Система помогает быстрее пройти рутинные этапы исследования, сохраняя контроль специалиста над неоднозначными решениями.</p>
+          </div>
+          <div class="capability-grid">
+            <article class="capability-card primary-capability reveal">
+              <div class="capability-copy"><span class="capability-mark">А</span><h3>Поиск по вариантам имени</h3><p>Система учитывает перестановки, инициалы и транслитерации, чтобы не пропустить возможную запись.</p><span class="detail-link">Кириллица · латиница · сокращения</span></div>
+              <div class="name-variants" aria-hidden="true"><span>Александр Тимофеев</span><span>Alexander Timofeev</span><span>Timofeev A. S.</span><i></i></div>
+            </article>
+            <article class="capability-card reveal reveal-delay-short">
+              <span class="capability-mark green-mark">✓</span><h3>Объяснимое сопоставление</h3><p>Решение учитывает идентификаторы, даты, страны и организации — не только похожесть строки.</p>
+              <div class="match-reasons"><span><i class="good"></i> Совпала дата рождения</span><span><i class="good"></i> Совпала организация</span><span><i class="warn"></i> Разные варианты имени</span></div>
+            </article>
+            <article class="capability-card reveal">
+              <span class="capability-mark purple-mark">◷</span><h3>История отношений</h3><p>Назначения, прекращения полномочий и периоды владения собираются в последовательную временную шкалу.</p>
+              <div class="mini-history" aria-hidden="true"><i></i><span style="--position: 12%">2014</span><b style="--position: 45%"></b><span style="--position: 64%">2019</span><b style="--position: 88%"></b><span style="--position: 100%">2024</span></div>
+            </article>
+            <article class="capability-card reveal reveal-delay-short">
+              <span class="capability-mark amber-mark">≋</span><h3>Связи с объяснением</h3><p>Общие руководители, адреса и цепочки владения показываются вместе с основаниями и ограничениями вывода.</p>
+              <div class="connection-demo" aria-hidden="true"><span>Человек</span><i></i><span>Компания</span><i></i><span>Адрес</span></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section workflow-section" id="workflow">
+        <div class="container workflow-grid">
+          <div class="workflow-copy reveal">
+            <span class="section-label light-label">Процесс</span>
+            <h2>Проверка остаётся управляемой на каждом этапе</h2>
+            <p>Автоматизируются повторяющиеся действия. Там, где цена ошибки высока, решение остаётся за пользователем.</p>
+            <a class="text-link" href="#principles">Почему это важно <span>→</span></a>
+          </div>
+          <ol class="workflow-steps">
+            <li class="reveal"><span>1</span><div><h3>Введите исходные сведения</h3><p>ФИО, страна, компания, дата рождения или известный идентификатор.</p></div></li>
+            <li class="reveal"><span>2</span><div><h3>Подтвердите нужного человека</h3><p>Если кандидатов несколько, система покажет совпадения и противоречия.</p></div></li>
+            <li class="reveal"><span>3</span><div><h3>Получите связи и хронологию</h3><p>Организации, должности и события собираются в едином исследовании.</p></div></li>
+            <li class="reveal"><span>4</span><div><h3>Проверьте каждое основание</h3><p>Для существенного факта доступна запись, документ или первоисточник.</p></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section principles-section" id="principles">
+        <div class="container">
+          <div class="section-heading centered reveal"><span class="section-label">Принципы</span><h2>Не скрываем неопределённость за красивым графиком</h2><p>Результат должен помогать принять взвешенное решение, а не создавать ложное ощущение точности.</p></div>
+          <div class="principle-grid">
+            <article class="principle-card reveal"><span class="status-symbol confirmed">✓</span><h3>Подтверждённый факт</h3><p>Прямо следует из источника и относится к установленному объекту.</p><span class="status-chip chip-green">Подтверждено</span></article>
+            <article class="principle-card reveal reveal-delay-short"><span class="status-symbol computed">↗</span><h3>Вычисленная связь</h3><p>Получена по понятному правилу из нескольких подтверждённых фактов.</p><span class="status-chip chip-blue">Есть объяснение</span></article>
+            <article class="principle-card reveal reveal-delay"><span class="status-symbol hypothesis">?</span><h3>Гипотеза</h3><p>Заслуживает проверки, но не выдаётся за установленный факт.</p><span class="status-chip chip-amber">Требует проверки</span></article>
+          </div>
+          <div class="trust-note reveal"><span class="trust-note-icon">i</span><p><strong>Наличие записи не означает нарушение.</strong> Платформа предоставляет доказательную основу для исследования, но не выносит юридических или моральных оценок.</p></div>
+        </div>
+      </section>
+
+      <section class="section audience-section" id="audience">
+        <div class="container audience-grid">
+          <div class="audience-copy reveal"><span class="section-label">Для кого</span><h2>Для специалистов, которым важно не просто найти, а доказать</h2><p>Платформа создаётся вокруг реального процесса проверки, где ценятся скорость, воспроизводимость и возможность вернуться к первоисточнику.</p></div>
+          <div class="audience-list">
+            <article class="audience-item reveal"><span>01</span><div><h3>Финансовые и корпоративные расследования</h3><p>Сбор исходной картины перед углублённым анализом.</p></div></article>
+            <article class="audience-item reveal"><span>02</span><div><h3>Комплексная проверка</h3><p>Проверка людей, компаний и существенных корпоративных связей.</p></div></article>
+            <article class="audience-item reveal"><span>03</span><div><h3>Комплаенс и безопасность</h3><p>Документированная проверка контрагентов и связанных лиц.</p></div></article>
+            <article class="audience-item reveal"><span>04</span><div><h3>Корпоративная аналитика</h3><p>Исследование структуры владения, управления и истории изменений.</p></div></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta-section" id="demo">
+        <div class="container">
+          <div class="cta-card reveal">
+            <div class="cta-grid" aria-hidden="true"></div>
+            <div class="cta-content"><span class="section-label light-label">Проект находится на этапе прототипа</span><h2>От разрозненных данных — к объяснимой истории связей</h2><p>Сейчас мы проверяем концепцию на реальных сценариях и формируем первый набор интеграций.</p><div class="cta-actions"><a class="button button-light" href="https://github.com/opazdunTeam/GraphX" target="_blank" rel="noreferrer">Открыть проект на GitHub <span>↗</span></a><a class="button button-outline-light" href="#top">Вернуться к началу</a></div></div>
+            <div class="cta-mark" aria-hidden="true"><img src="assets/mark.svg" alt=""></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <a class="brand footer-brand" href="#top"><img src="assets/mark.svg" alt="" width="38" height="38"><span class="brand-copy"><strong>Проверка контрагента</strong><span>Связи. Источники. История.</span></span></a>
+        <p>Исследовательский проект · <span data-year>2026</span></p>
+      </div>
+    </footer>
+  </body>
+</html>

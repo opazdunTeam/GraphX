@@ -1,0 +1,25 @@
+[Unit]
+Description=OSINT Temporal static landing page
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/osint-temporal-landing
+ExecStart=/usr/bin/python3 -m http.server 18080 --bind 0.0.0.0 --directory /opt/osint-temporal-landing
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadOnlyPaths=/opt/osint-temporal-landing
+
+[Install]
+WantedBy=multi-user.target
