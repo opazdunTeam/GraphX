@@ -12,6 +12,11 @@ ADR фиксирует значимое техническое решение, �
 - [ADR-0006: MinIO для исходных материалов](0006-minio-artifacts.md)
 - [ADR-0007: goose и ручные SQL-миграции](0007-goose-sql-migrations.md)
 - [ADR-0008: Nginx как reverse proxy](0008-nginx-reverse-proxy.md)
+- [ADR-0009: двухфазный поиск исходного контрагента](0009-two-phase-subject-resolution.md)
+- [ADR-0010: polling в MVP и развитие через ETag/SSE](0010-polling-etag-sse.md)
+- [ADR-0011: версионируемая обработка и пересобираемые канонические проекции](0011-versioned-processing-and-rebuildable-projections.md)
+- [ADR-0012: попытки задания и бизнес-идемпотентность сообщений](0012-message-attempts-and-business-idempotency.md)
+- [ADR-0013: snapshot не является окончанием отношения](0013-snapshots-and-valid-time.md)
 
 ## Шаблон
 

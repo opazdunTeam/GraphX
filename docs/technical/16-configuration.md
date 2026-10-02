@@ -3,8 +3,8 @@ status: draft
 owner: tech-lead
 reviewers: [project-team]
 created: 2026-09-19
-updated: 2026-09-19
-version: 0.1
+updated: 2026-10-02
+version: 0.3
 ---
 
 # Конфигурация окружения
@@ -62,7 +62,11 @@ S3_BUCKET_ARTIFACTS=graphx-artifacts
 S3_ACCESS_KEY=change-me
 S3_SECRET_KEY=change-me
 S3_USE_PATH_STYLE=true
+S3_ALLOW_OVERWRITE=false
+S3_REQUIRE_VERSIONING=false
 ```
+
+`S3_ALLOW_OVERWRITE=false` запрещает заменить существующий object key другим содержимым; повтор с тем же SHA-256 считается идемпотентным. Для пустого локального окружения versioning может быть необязательным, но перед загрузкой реальных демонстрационных материалов bucket создаётся с versioning, а `S3_REQUIRE_VERSIONING=true` заставляет процесс завершить запуск при неверной конфигурации.
 
 ### Ограничения расследования
 
@@ -71,10 +75,11 @@ INVESTIGATION_DEFAULT_DEPTH=1
 INVESTIGATION_MAX_DEPTH=2
 INVESTIGATION_DEFAULT_ENTITY_LIMIT=50
 INVESTIGATION_MAX_ENTITY_LIMIT=100
+INVESTIGATION_DISCOVERY_TIMEOUT=30s
 INVESTIGATION_SOURCE_TIMEOUT=2m
 ```
 
-API принимает пользовательское значение только в пределах hard limit из конфигурации. Изменение лимита влияет на стоимость, время и размер графа, поэтому production/demo значения проходят ревью.
+`INVESTIGATION_DISCOVERY_TIMEOUT` ограничивает ожидание обязательных discovery-источников перед формированием review; он не является тайм-аутом каждого HTTP-запроса к источнику. API принимает пользовательское значение только в пределах hard limit из конфигурации. Изменение лимита влияет на стоимость, время и размер графа, поэтому production/demo значения проходят ревью.
 
 ### Воркеры
 
@@ -91,6 +96,9 @@ PLAYWRIGHT_ENABLED=false
 ```dotenv
 SOURCE_ICIJ_ENABLED=true
 SOURCE_OPENSANCTIONS_ENABLED=true
+SOURCE_KASE_ENABLED=false
+SOURCE_KGD_ENABLED=false
+SOURCE_KGD_API_TOKEN=
 SOURCE_OPENCORPORATES_ENABLED=false
 SOURCE_OPENCORPORATES_API_KEY=
 ```

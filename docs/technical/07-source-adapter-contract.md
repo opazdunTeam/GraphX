@@ -3,8 +3,8 @@ status: draft
 owner: data-lead
 reviewers: [tech-lead, backend]
 created: 2026-09-19
-updated: 2026-09-19
-version: 0.1
+updated: 2026-10-02
+version: 0.2
 ---
 
 # Контракт адаптера источника
@@ -43,6 +43,8 @@ class SourceAdapter(Protocol):
 - проверку отмены и deadline;
 - публикацию прогресса;
 - доступ к секретам только своего источника.
+
+Context также содержит `job_id`, `attempt_no`, `attempt_id`, deadline и `root_command_id`. Повтор попытки не разрешает перезаписать object key другим содержимым.
 
 Адаптер не создаёт собственные подключения к RabbitMQ, MinIO и системе логирования в обход runtime SDK.
 
@@ -92,6 +94,8 @@ license_notes
 
 HTML или API response сохраняется до очистки. Если сохранение полного ответа запрещено условиями источника, адаптер явно возвращает ограниченное evidence и соответствующее предупреждение.
 
+Artifact адресуется независимо от investigation/job. Результат адаптера возвращает metadata и связь использования, а Go ingestion регистрирует `job_artifacts`. Производный текст содержит ссылку на parent artifact. Повторный PUT по существующему object key считается успешным только при совпадении SHA-256.
+
 ## 7. SourceRecord
 
 SourceRecord отражает запись так, как её понимает источник:
@@ -111,13 +115,15 @@ SourceRecord отражает запись так, как её понимает 
 
 Значимые поля нельзя молча отбрасывать. Неизвестное поле остаётся в `raw_data`, пока для него не появится согласованное отображение.
 
+Каждый CollectResult задаёт версии parser, mapper, normalization и ingest schema. Go создаёт отдельный `processing_run`; повторная обработка того же artifact не изменяет записи прежнего run.
+
 ## 8. Claim
 
 Mapper выдаёт минимальные утверждения, например:
 
 ```json
 {
-  "claim_type": "person_name",
+  "claim_kind": "attribute",
   "subject_local_ref": "person:123",
   "predicate": "name",
   "object": {"type": "string", "value": "Alexander Klebanov"},
@@ -173,4 +179,3 @@ Mapper выдаёт минимальные утверждения, наприм�
 7. Пройти контрактные тесты.
 8. Проверить источник на контрольном лице/организации.
 9. Включить source feature flag для демонстрационного окружения.
-
