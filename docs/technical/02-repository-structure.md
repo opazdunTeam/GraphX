@@ -210,7 +210,7 @@ db/migrations/
 
 Разделение стартовой схемы на несколько последовательных файлов упрощает ревью и поиск причины ошибки. Один гигантский файл не является обязательным условием «стартовой миграции».
 
-`00003` включает `source_jobs`, outbox/inbox, бизнес-дедупликацию worker results и HTTP idempotency. `00004` включает независимые artifacts, связи job—artifact, `processing_runs`, source records и claims. Source record уникален внутри processing run, поэтому новый parser не перезаписывает исторический результат. Состав и ограничения этих миграций сначала синхронизируются с [моделью данных](04-data-model.md); сокращённая ERD не заменяет точные `NULL`, `DEFAULT`, `CHECK`, `UNIQUE`, foreign-key и `ON DELETE` правила SQL.
+`00003` включает `source_jobs`, outbox/inbox, бизнес-дедупликацию worker results и HTTP idempotency. `00004` включает независимые artifacts, связи job-artifact, `processing_runs`, source records и claims. Source record уникален внутри processing run, поэтому новый parser не перезаписывает исторический результат. Состав и ограничения этих миграций сначала синхронизируются с [моделью данных](04-data-model.md); сокращённая ERD не заменяет точные `NULL`, `DEFAULT`, `CHECK`, `UNIQUE`, foreign-key и `ON DELETE` правила SQL.
 
 ### `db/seeds`
 
@@ -228,8 +228,8 @@ Seed-файлы запускаются только явной локально�
 ## 6. Контракты и генерация
 
 - OpenAPI хранится в `contracts/openapi.yaml`.
-- JSON Schema сообщений — в `contracts/schemas/messages/`.
-- JSON Schema результатов адаптеров — в `contracts/schemas/ingestion/`.
+- JSON Schema сообщений - в `contracts/schemas/messages/`.
+- JSON Schema результатов адаптеров - в `contracts/schemas/ingestion/`.
 - TypeScript API client генерируется в `apps/web/src/shared/api/generated/`.
 - Сгенерированный код не изменяется вручную.
 - Python Pydantic-модели и Go-модели проверяются контрактными тестами даже при ручной реализации.

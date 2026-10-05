@@ -10,7 +10,7 @@ RabbitMQ доставляет сообщения как минимум один 
 
 ## Решение
 
-`job_id` идентифицирует бизнес-работу, `message_id` — одну публикацию, `attempt_no` и `attempt_id` — конкретную попытку. Worker events дополнительно содержат `root_command_id`; terminal result содержит `result_digest`.
+`job_id` идентифицирует бизнес-работу, `message_id` - одну публикацию, `attempt_no` и `attempt_id` - конкретную попытку. Worker events дополнительно содержат `root_command_id`; terminal result содержит `result_digest`.
 
 Go consumer сначала дедуплицирует публикацию через inbox, затем применяет guarded business transition по `job_id + attempt_no`. Терминальное состояние не понижается поздним `started` или `retry_scheduled`. Ingestion одного результата защищается устойчивым business key, включающим job, artifact/result digest и processing version.
 

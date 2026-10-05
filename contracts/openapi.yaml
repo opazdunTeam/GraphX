@@ -1,0 +1,75 @@
+openapi: 3.1.0
+info:
+  title: GraphX API
+  version: 0.0.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: >-
+    Каркас публичного HTTP-контракта. Paths и schemas добавляются до реализации
+    соответствующих handlers согласно docs/technical/05-api-contract.md.
+servers:
+  - url: /api/v1
+    description: Relative API base path
+security: []
+paths:
+  /health/live:
+    servers:
+      - url: /
+    get:
+      operationId: getLiveness
+      summary: Проверить, что процесс API запущен
+      tags: [health]
+      responses:
+        "200":
+          description: Процесс работает
+          headers:
+            X-Request-ID:
+              description: Диагностический идентификатор HTTP-запроса
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Liveness"
+  /health/ready:
+    servers:
+      - url: /
+    get:
+      operationId: getReadiness
+      summary: Проверить готовность API принимать запросы
+      tags: [health]
+      responses:
+        "200":
+          description: Все подключённые обязательные зависимости готовы
+          headers:
+            X-Request-ID:
+              description: Диагностический идентификатор HTTP-запроса
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+components:
+  schemas:
+    Liveness:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    Readiness:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          const: ready
+        checks:
+          type: object
+          additionalProperties:
+            type: string

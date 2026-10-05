@@ -74,7 +74,7 @@ roles                    saved_reports
 audit_log
 ```
 
-Таблицы `graph_nodes` и `graph_edges` не нужны: узлы — `entities`, рёбра — `relationships`; вычисляемый граф является DTO или поздней производной проекцией.
+Таблицы `graph_nodes` и `graph_edges` не нужны: узлы - `entities`, рёбра - `relationships`; вычисляемый граф является DTO или поздней производной проекцией.
 
 ## 3. ERD MVP
 
@@ -306,13 +306,13 @@ erDiagram
     }
 ```
 
-`PK` — первичный ключ, `FK` — внешний, `UK` — уникальное ограничение. ERD показывает ключевые поля; точная семантика определяется ниже и реализуется SQL-миграциями.
+`PK` - первичный ключ, `FK` - внешний, `UK` - уникальное ограничение. ERD показывает ключевые поля; точная семантика определяется ниже и реализуется SQL-миграциями.
 
 ## 4. Расследование и задания
 
 ### `investigations`
 
-Одна строка — один запуск исследования.
+Одна строка - один запуск исследования.
 
 | Поле | Назначение |
 |---|---|
@@ -330,7 +330,7 @@ erDiagram
 | `failure_code`, `failure_detail text` | Причина системного провала всего расследования |
 | `created_at`, `updated_at timestamptz` | Системные метки |
 
-`status`, `stage` и необходимость действия не дублируют друг друга: первое описывает жизненный цикл, второе — фазу, а необходимость действия вычисляется как `pending_review_count > 0`. Счётчик меняется в одной транзакции с созданием или закрытием review. `state_version` увеличивается в той же транзакции при каждом видимом изменении статуса, этапа, прогресса или требуемого действия. Отдельная `search_subjects` появится только при нескольких исходных субъектах в одном расследовании.
+`status`, `stage` и необходимость действия не дублируют друг друга: первое описывает жизненный цикл, второе - фазу, а необходимость действия вычисляется как `pending_review_count > 0`. Счётчик меняется в одной транзакции с созданием или закрытием review. `state_version` увеличивается в той же транзакции при каждом видимом изменении статуса, этапа, прогресса или требуемого действия. Отдельная `search_subjects` появится только при нескольких исходных субъектах в одном расследовании.
 
 ### `sources`
 
@@ -436,7 +436,7 @@ Artifact не принадлежит одному job: сохранённый м
 | `supersedes_id uuid` | Предыдущий run, который заменяется после успешного завершения |
 | `started_at`, `completed_at timestamptz` | Временные метки |
 
-Для одного artifact может существовать много исторических runs, но не более одного актуального успешного run для `(artifact_id, processing_scope)`. Новый run становится актуальным одной транзакцией: прежний `succeeded` переводится в `superseded`, а новый — в `succeeded` только после полной валидации его records и claims. Неудачный запуск не скрывает предыдущий результат.
+Для одного artifact может существовать много исторических runs, но не более одного актуального успешного run для `(artifact_id, processing_scope)`. Новый run становится актуальным одной транзакцией: прежний `succeeded` переводится в `superseded`, а новый - в `succeeded` только после полной валидации его records и claims. Неудачный запуск не скрывает предыдущий результат.
 
 ### `source_records`
 
@@ -483,7 +483,7 @@ Artifact не принадлежит одному job: сохранённый м
 | `normalization_version text` | Версия нормализации производного значения |
 | `created_at timestamptz` | Время сохранения |
 
-Для `attribute` заполняется `value`, для `relationship` — `object_record_id`. Для `event` явно задаются `predicate`, subject и при необходимости object record, а дата находится в temporal fields/qualifiers; допустимые комбинации обеспечиваются отдельными `CHECK` по `claim_kind`. Locator находится в claim, поэтому `evidence_refs` в MVP не нужна. Публичный evidence resource идентифицируется `claim_id` и возвращает claim, locator, source record и artifact metadata.
+Для `attribute` заполняется `value`, для `relationship` - `object_record_id`. Для `event` явно задаются `predicate`, subject и при необходимости object record, а дата находится в temporal fields/qualifiers; допустимые комбинации обеспечиваются отдельными `CHECK` по `claim_kind`. Locator находится в claim, поэтому `evidence_refs` в MVP не нужна. Публичный evidence resource идентифицируется `claim_id` и возвращает claim, locator, source record и artifact metadata.
 
 ## 6. Канонические сущности
 
@@ -591,7 +591,7 @@ Review создаётся и для автоматического решени�
 | `recommendation text` | `auto_link`, `review`, `reject` |
 | `created_at` | Время вычисления |
 
-Для `initial_subject` заполнен `candidate_record_id`, для `entity_resolution` — `candidate_entity_id`; одновременно оба поля не заполняются. Порядок выдачи определяется `score`, но выбор не делается по позиции в списке. Уникальность обеспечивается внутри review отдельно для record и entity.
+Для `initial_subject` заполнен `candidate_record_id`, для `entity_resolution` - `candidate_entity_id`; одновременно оба поля не заполняются. Порядок выдачи определяется `score`, но выбор не делается по позиции в списке. Уникальность обеспечивается внутри review отдельно для record и entity.
 
 ### `match_decisions`
 
@@ -691,7 +691,7 @@ Inbox Go consumers, предотвращающий повторное приме
 | `outcome text` | `processed` или намеренно `ignored` |
 | `consumed_at timestamptz` | Когда эффект зафиксирован |
 
-Python workers не используют таблицу: они не подключаются к PostgreSQL. Их повторное чтение должно быть безопасным, object key — детерминированным, а повторный результат дедуплицирует Go consumer.
+Python workers не используют таблицу: они не подключаются к PostgreSQL. Их повторное чтение должно быть безопасным, object key - детерминированным, а повторный результат дедуплицирует Go consumer.
 
 Контрактно некорректное сообщение не помечается consumed: оно отправляется в DLQ. Inbox фиксируется в одной транзакции с полезным эффектом либо намеренным игнорированием уже неактуального результата.
 
@@ -744,11 +744,11 @@ Python workers не используют таблицу: они не подкл�
 
 ## 11. Типы, ограничения и индексы
 
-- Audit timestamp — `timestamptz` в UTC. Они показывают время записи/изменения проекции, но не образуют полную bitemporal system-time history.
-- Предметные даты — `date` вместе с precision/basis.
-- Интервалы — полуоткрытые `[valid_from, valid_to)`; snapshot хранится отдельно и не является правой границей.
+- Audit timestamp - `timestamptz` в UTC. Они показывают время записи/изменения проекции, но не образуют полную bitemporal system-time history.
+- Предметные даты - `date` вместе с precision/basis.
+- Интервалы - полуоткрытые `[valid_from, valid_to)`; snapshot хранится отдельно и не является правой границей.
 - `valid_to = NULL` означает неизвестную границу, не «действует сейчас».
-- Статусы — `text + CHECK`, а не PostgreSQL enum на раннем MVP.
+- Статусы - `text + CHECK`, а не PostgreSQL enum на раннем MVP.
 - JSONB используется для source-specific полей, но не заменяет колонки поиска и связей.
 
 Обязательные ограничения:
@@ -806,7 +806,7 @@ investigation_entities(investigation_id, depth)
 outbox_messages(available_at) WHERE published_at IS NULL
 ```
 
-`pg_trgm` создаётся первой миграцией, а основной индекс — по `entity_names.normalized_name`:
+`pg_trgm` создаётся первой миграцией, а основной индекс - по `entity_names.normalized_name`:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -847,7 +847,7 @@ Claims и decisions не переписываются молча. Ошибочн
 2. `source_jobs` создаёт discovery-работу ICIJ; outbox публикует её в RabbitMQ.
 3. Python worker сохраняет оригинал в MinIO.
 4. Go consumer регистрирует `artifacts`, `source_records` и `claims`.
-5. `match_reviews` фиксирует актуальный набор, а `match_candidates` — найденные записи исходного контрагента.
+5. `match_reviews` фиксирует актуальный набор, а `match_candidates` - найденные записи исходного контрагента.
 6. Сильное правило либо пользователь создаёт `match_decisions`.
 7. Та же транзакция фиксирует корневую entity, `entity_records`, `investigation_entities` и enrichment jobs/outbox.
 8. Enrichment получает данные только по разрешённому субъекту; варианты имени попадают в `entity_names`.

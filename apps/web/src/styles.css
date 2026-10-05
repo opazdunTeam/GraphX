@@ -1,0 +1,92 @@
+:root {
+  color: #e9eef5;
+  background: #0b1118;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 2rem;
+}
+
+.hero {
+  width: min(48rem, 100%);
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: #70d7c7;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(3rem, 10vw, 7rem);
+  line-height: 0.95;
+}
+
+.lead {
+  max-width: 42rem;
+  margin: 1.5rem 0 2rem;
+  color: #aebdca;
+  font-size: 1.125rem;
+  line-height: 1.65;
+}
+
+.status-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid #263746;
+  border-radius: 0.75rem;
+  background: #263746;
+}
+
+.status-card div {
+  padding: 1rem 1.25rem;
+  background: #111b25;
+}
+
+.status-card dt {
+  color: #8194a6;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.status-card dd {
+  margin: 0.35rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
