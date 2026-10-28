@@ -11,7 +11,7 @@ class MessageEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message_id: UUID
-    message_type: str = Field(min_length=1)
+    type: str = Field(min_length=1)
     schema_version: int = Field(ge=1)
     occurred_at: datetime
     correlation_id: str = Field(min_length=1)

@@ -10,15 +10,40 @@
 - карточки сущностей и доказательств;
 - компактный граф и временную шкалу.
 
-Transport DTO преобразуются в `shared/api`/entity models, а не разбираются внутри page components.
+Transport DTO преобразуются в `shared/api`/entity models, а не разбираются внутри page components. Все команды ниже выполняются из корня репозитория.
+
+## Запуск и проверка
+
+### Windows (PowerShell)
 
 ```powershell
-npm ci
-npm run dev
-npm run check
-npm run build
+cd apps/web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+```powershell
+# Проверки
+cd apps/web
+pnpm check
+pnpm build
+```
+
+### Linux
+
+```bash
+cd apps/web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+```bash
+# Проверки
+cd apps/web
+pnpm check
+pnpm build
 ```
 
 Dev server работает на `http://localhost:5173` и проксирует `/api` на `http://localhost:8080`.
 
-См. [архитектуру интерфейса](../../docs/technical/10-frontend-architecture.md).
+См. [описание интерфейса](../../docs/13-frontend.md).

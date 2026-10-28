@@ -1,80 +1,132 @@
 # GraphX
 
-GraphX - учебная платформа для автоматизации due diligence, forensic investigation и corporate intelligence. Репозиторий организован как монорепозиторий: Go владеет API, orchestration и канонической моделью, Python - получением и разбором материалов источников, Vue - пользовательским интерфейсом.
+GraphX - платформа для автоматизации due diligence, forensic и corporate intelligence расследований.
 
-## Структура
+## Документация
+
+- [Вся документация проекта](docs/README.md)
+- [Концепция и назначение](docs/00-concept.md)
+- [Архитектура и структура репозитория](docs/05-architecture.md)
+- [Правила разработки](docs/15-development.md)
+- [Брендборд проекта](docs/brandboard.md)
+- [Лендинг проекта](landing/index.html) ([текущий адрес](http://72.56.109.185))
+
+## Общая структура репозитория
 
 ```text
 apps/
-├── api/          Go API и consumers
-└── web/          Vue 3 SPA
-workers/          единый Python-пакет адаптеров и workers
-contracts/        OpenAPI и будущие JSON Schema сообщений/ingestion
+├── api/          Go API
+└── web/          Vue 3 фронтенд
+workers/          Python-пакет адаптеров и воркеров для работы с источниками
+contracts/        OpenAPI, JSON схема сообщений
 db/migrations/    ручные SQL-миграции goose
-deploy/           необязательные deployment-файлы
-docs/             проектные и технические соглашения
-testdata/         обезличенные межкомпонентные fixtures
-landing/          существующий статический лендинг
+deploy/           файлы будущего развёртывания
+docs/             общая и техническая документация
+testdata/         фикстуры для тестов
+landing/          статический лендинг для демонстрации дизайна и бренда
 ```
 
-Каталоги наполняются по мере реализации соответствующей задачи. Пустые слои и сервисы заранее не создаются.
+Каталоги наполняются по мере реализации соответствующей задачи.
 
 ## Границы компонентов
 
-- `apps/api` - единственный владелец PostgreSQL business state и канонического графа.
-- `workers` не подключается к PostgreSQL и возвращает результаты через RabbitMQ.
-- `apps/web` использует только публичный HTTP API.
-- `contracts` фиксирует форматы на границах компонентов.
-- `db/migrations` является точным источником истины о реализованной схеме БД.
+- `apps/api` - единственный владелец состояний, хранящихся в PostgreSQL, и канонического графа.
+- `workers` - возвращает результаты через RabbitMQ, не подключается к PostgreSQL.
+- `apps/web` - использует только публичный HTTP Go API.
+- `contracts` - фиксирует форматы на границах компонентов.
+- `db/migrations` - единственный источник истины о схеме БД.
 - исходные материалы хранятся в S3/MinIO без перезаписи другим содержимым.
 
 ## Начало работы
 
-Требуются Go 1.26, Python 3.12, `uv`, Node.js 24 и npm 11. Используйте `.env.example` как перечень переменных; реальные значения помещаются в локальный `.env` и не коммитятся.
+Требуются Go 1.27, Python 3.15, `uv`, Node.js 24 и pnpm 11. `.env.example` содержит перечень переменных; перенесите необходимые значения в локальный `.env`.
+
+Команды выполняются из корня репозитория. API, workers и web запускаются в отдельных терминалах.
+
+### Windows (PowerShell): запуск
 
 ```powershell
-# API
-Set-Location apps/api
+cp .env.example .env
+
+# Терминал 1: API
+cd apps/api
 go run ./cmd/api
-
-# Workers: установка и проверка трёх entrypoints
-Set-Location ../../workers
-python -m uv sync
-python -m uv run graphx-source-worker --check
-python -m uv run graphx-document-worker --check
-python -m uv run graphx-browser-worker --check
-
-# Web
-Set-Location ../apps/web
-npm ci
-npm run dev
 ```
 
-Проверка перед pull request:
+```powershell
+# Терминал 2: workers
+cd workers
+uv sync
+uv run graphx-source-worker --check
+uv run graphx-document-worker --check
+uv run graphx-browser-worker --check
+```
 
 ```powershell
-Set-Location apps/api
+# Терминал 3: web
+cd apps/web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+### Linux: запуск
+
+```bash
+cp .env.example .env
+
+# Терминал 1: API
+cd apps/api
+go run ./cmd/api
+```
+
+```bash
+# Терминал 2: workers
+cd workers
+uv sync
+uv run graphx-source-worker --check
+uv run graphx-document-worker --check
+uv run graphx-browser-worker --check
+```
+
+```bash
+# Терминал 3: web
+cd apps/web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+## Проверка изменений
+
+### Windows (PowerShell): проверка
+
+```powershell
+cd apps/api
 go test ./...
 go vet ./...
 
-Set-Location ../../workers
-python -m uv run ruff check .
-python -m uv run mypy
-python -m uv run pytest
+cd ../../workers
+uv run ruff check .
+uv run mypy
+uv run pytest
 
-Set-Location ../apps/web
-npm run check
-npm run build
+cd ../apps/web
+pnpm check
+pnpm build
 ```
 
-PostgreSQL, RabbitMQ и MinIO подключаются следующими вертикальными задачами. Текущие сервисы не имитируют успешное подключение к отсутствующим зависимостям.
+### Linux: проверка
 
+```bash
+cd apps/api
+go test ./...
+go vet ./...
 
-## Документация
+cd ../../workers
+uv run ruff check .
+uv run mypy
+uv run pytest
 
-- [Концепция и соглашения проекта](docs/project/README.md)
-- [Техническая документация](docs/technical/README.md)
-- [Структура репозитория](docs/technical/02-repository-structure.md)
-- [Правила разработки](docs/technical/15-development-rules.md)
-- [Брендборд проекта](docs/brandboard.md)
-- [Лендинг проекта](landing/index.html) ([текущий адрес](http://72.56.109.185))
+cd ../apps/web
+pnpm check
+pnpm build
+```

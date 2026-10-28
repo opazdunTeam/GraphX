@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/messages/source-collect-completed.v1.schema.json",
+  "title": "Source collect completed v1",
+  "allOf": [
+    {
+      "$ref": "message-envelope.v1.schema.json"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "source.collect.completed.v1"
+        },
+        "payload": {
+          "$ref": "../ingestion/source-result.v1.schema.json"
+        }
+      }
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 # Default integration owner
+
 * @rosiaAI
 
-# Component owners
+## Component owners
+
 /apps/api/ @SypherFLS @rosiaAI
 /db/ @SypherFLS @rosiaAI
 /workers/ @ShishkaQ @rosiaAI
