@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/messages/source-collect-requested.v1.schema.json",
+  "title": "Source collect requested v1",
+  "allOf": [
+    {
+      "$ref": "message-envelope.v1.schema.json"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "source.collect.requested.v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "attempt_no",
+        "investigation_id",
+        "source",
+        "operation",
+        "purpose",
+        "query",
+        "limits",
+        "deadline"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "investigation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "enum": ["subject_discovery", "enrichment", "branch_expansion", "reprocessing"]
+        },
+        "query": {
+          "type": "object"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_records": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "deadline": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

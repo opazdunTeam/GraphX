@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/ingestion/source-result.v1.schema.json",
+  "title": "Source result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "attempt_no",
+    "outcome",
+    "record_count",
+    "adapter_version",
+    "parser_version",
+    "mapping_version",
+    "normalization_version",
+    "digest",
+    "artifacts",
+    "records",
+    "claims",
+    "warnings"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_no": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "outcome": {
+      "enum": ["succeeded", "not_found"]
+    },
+    "record_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "adapter_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parser_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mapping_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "normalization_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "manifest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "object_key",
+        "sha256",
+        "media_type",
+        "byte_size",
+        "source_uri",
+        "retrieved_at",
+        "http_metadata"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["raw_response", "document", "manifest", "screenshot", "other"]
+        },
+        "object_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "published_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "http_metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_ref", "record_type", "schema_version", "raw_data"],
+      "properties": {
+        "local_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "record_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "external_id": {
+          "type": ["string", "null"]
+        },
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "raw_data": {
+          "type": "object"
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_kind", "subject_local_ref", "predicate", "evidence_locator"],
+      "anyOf": [
+        {
+          "required": ["object_local_ref"]
+        },
+        {
+          "required": ["value"]
+        }
+      ],
+      "properties": {
+        "claim_kind": {
+          "enum": ["attribute", "relationship", "event"]
+        },
+        "subject_local_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "predicate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "object_local_ref": {
+          "type": ["string", "null"]
+        },
+        "value": true,
+        "raw_value": true,
+        "normalized_value": true,
+        "qualifiers": {
+          "type": "object"
+        },
+        "valid_from": {
+          "type": ["string", "null"]
+        },
+        "valid_to": {
+          "type": ["string", "null"]
+        },
+        "valid_from_precision": {
+          "enum": ["day", "month", "year", "approximate", "unknown"]
+        },
+        "valid_to_precision": {
+          "enum": ["day", "month", "year", "approximate", "unknown"]
+        },
+        "temporal_basis": {
+          "enum": ["explicit", "event_derived", "snapshot", "computed", "unknown"]
+        },
+        "snapshot_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "evidence_locator": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "evidence_excerpt": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

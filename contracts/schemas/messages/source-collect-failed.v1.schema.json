@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/messages/source-collect-failed.v1.schema.json",
+  "title": "Source collect failed v1",
+  "allOf": [
+    {
+      "$ref": "message-envelope.v1.schema.json"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "source.collect.failed.v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "attempt_no", "error"],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "classification", "message"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "classification": {
+              "enum": ["transient", "rate_limited", "permanent", "action_required", "bug"]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retry_after_seconds": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

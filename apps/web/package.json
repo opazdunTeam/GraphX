@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.6.0",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
   },
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && npm run build-only",
+    "build": "pnpm typecheck && pnpm build-only",
     "build-only": "vite build",
     "typecheck": "vue-tsc --build",
     "lint": "eslint --max-warnings=0 src tests vite.config.ts",
@@ -16,7 +18,7 @@
     "format:check": "prettier --check .",
     "test": "vitest",
     "test:run": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm run test:run && npm run format:check"
+    "check": "pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
   },
   "dependencies": {
     "pinia": "4.0.3",

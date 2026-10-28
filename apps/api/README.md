@@ -9,15 +9,52 @@
 - внутренние предметные модули располагаются в `internal/<area>`;
 - интеграционный код PostgreSQL, RabbitMQ и MinIO остаётся в adapter/platform слоях.
 
-Предметный код не должен импортировать Gin, pgx или RabbitMQ SDK.
+Предметный код не должен импортировать Gin, pgx или RabbitMQ SDK. Все команды ниже выполняются из корня репозитория.
+
+## Запуск и проверка
+
+### Windows (PowerShell)
 
 ```powershell
+# API
+cd apps/api
 go run ./cmd/api
+```
+
+```powershell
+# Consumer в отдельном терминале
+cd apps/api
 go run ./cmd/consumer
+```
+
+```powershell
+# Проверки
+cd apps/api
+go test ./...
+go vet ./...
+```
+
+### Linux
+
+```bash
+# API
+cd apps/api
+go run ./cmd/api
+```
+
+```bash
+# Consumer в отдельном терминале
+cd apps/api
+go run ./cmd/consumer
+```
+
+```bash
+# Проверки
+cd apps/api
 go test ./...
 go vet ./...
 ```
 
 API предоставляет `/health/live` и `/health/ready`. Пока обязательные внешние зависимости не подключены, readiness возвращает пустой набор checks. Consumer запускается в явно обозначенном idle scaffold mode до реализации RabbitMQ runtime.
 
-См. [структуру репозитория](../../docs/technical/02-repository-structure.md) и [архитектуру](../../docs/technical/01-system-architecture.md).
+См. [архитектуру и структуру репозитория](../../docs/05-architecture.md) и [правила разработки](../../docs/15-development.md).
