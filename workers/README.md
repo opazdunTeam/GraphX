@@ -3,7 +3,6 @@
 Единый Python-пакет получения и разбора внешних материалов.
 
 Граница ответственности:
-
 - runtime принимает самодостаточную RabbitMQ-команду;
 - adapter получает ответ источника и сначала сохраняет artifact в MinIO;
 - parser/mapper возвращают versioned SourceRecord и Claim;

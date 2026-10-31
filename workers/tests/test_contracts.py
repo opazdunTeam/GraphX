@@ -1,7 +1,10 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
 
 from graphx_workers.contracts.artifacts import ArtifactReference
 from graphx_workers.contracts.claims import Claim
@@ -92,3 +95,72 @@ def test_source_result_preserves_provenance_and_processing_versions() -> None:
     assert dumped["artifacts"][0]["source_uri"] == "fixture://subject"
     assert dumped["records"][0]["external_id"] == "external-1"
     assert dumped["claims"][0]["normalized_value"] == "example"
+
+
+def test_claim_rejects_empty_value_and_invalid_temporal_anchor() -> None:
+    with pytest.raises(ValidationError):
+        Claim(
+            claim_kind="attribute",
+            subject_local_ref="person-1",
+            predicate="name",
+            evidence_locator={"json_pointer": "/name"},
+        )
+
+    with pytest.raises(ValidationError):
+        Claim(
+            claim_kind="event",
+            subject_local_ref="person-1",
+            predicate="appointed",
+            value=True,
+            valid_from=date(2020, 5, 15),
+            valid_from_precision="month",
+            temporal_basis="explicit",
+            evidence_locator={"json_pointer": "/appointed"},
+        )
+
+
+def test_manifest_result_does_not_duplicate_inline_data() -> None:
+    retrieved_at = datetime.now(UTC)
+    manifest = ArtifactReference(
+        kind="manifest",
+        object_key="fixture/manifest.json",
+        sha256="c" * 64,
+        media_type="application/json",
+        byte_size=100,
+        source_uri="fixture://manifest",
+        retrieved_at=retrieved_at,
+        http_metadata={},
+    )
+
+    result = SourceResult(
+        job_id=uuid4(),
+        attempt_no=1,
+        outcome="succeeded",
+        record_count=20,
+        adapter_version="fixture-1",
+        parser_version="parser-1",
+        mapping_version="mapping-1",
+        normalization_version="normalization-1",
+        digest="d" * 64,
+        artifacts=[],
+        manifest=manifest,
+        records=[],
+        claims=[],
+        warnings=[],
+    )
+    assert result.record_count == 20
+
+    with pytest.raises(ValidationError):
+        SourceResult(
+            **{
+                **result.model_dump(),
+                "records": [
+                    SourceRecord(
+                        local_ref="person-1",
+                        record_type="person",
+                        schema_version="fixture-v1",
+                        raw_data={},
+                    )
+                ],
+            }
+        )

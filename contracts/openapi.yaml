@@ -13,6 +13,13 @@ servers:
   - url: /api/v1
     description: Основной путь API
 security: []
+tags:
+  - name: health
+    description: Проверка процесса API и обязательных зависимостей
+  - name: investigations
+    description: Создание расследования и чтение его состояния
+  - name: evidence
+    description: Происхождение утверждений и доступ к сохранённым материалам
 paths:
   /health/live:
     servers:
@@ -21,6 +28,8 @@ paths:
       operationId: getLiveness
       summary: Проверить, что процесс API запущен
       tags: [health]
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Процесс работает
@@ -38,6 +47,8 @@ paths:
       operationId: getReadiness
       summary: Проверить готовность API принимать запросы
       tags: [health]
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Обязательные зависимости готовы
@@ -56,6 +67,7 @@ paths:
       summary: Создать расследование
       tags: [investigations]
       parameters:
+        - $ref: "#/components/parameters/RequestID"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -72,6 +84,8 @@ paths:
               schema:
                 type: string
                 format: uri-reference
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
@@ -87,9 +101,13 @@ paths:
       tags: [investigations]
       parameters:
         - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Текущее состояние расследования
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
@@ -103,9 +121,13 @@ paths:
       tags: [investigations]
       parameters:
         - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Состояние расследования
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
@@ -119,10 +141,14 @@ paths:
       tags: [investigations]
       parameters:
         - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Расследование отменено
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
@@ -138,13 +164,46 @@ paths:
       tags: [evidence]
       parameters:
         - $ref: "#/components/parameters/ClaimID"
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Утверждение и ссылка на исходный материал
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ClaimEvidence"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /artifacts/{artifact_id}/content:
+    get:
+      operationId: getArtifactContent
+      summary: Открыть сохранённый исходный материал
+      description: >-
+        Возвращает неизменяемое содержимое artifact через Go API. Object key MinIO
+        наружу не передаётся. Content-Type ответа соответствует сохранённому
+        media type.
+      tags: [evidence]
+      parameters:
+        - $ref: "#/components/parameters/ArtifactID"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: Содержимое исходного материала
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            ETag:
+              description: SHA-256 неизменяемого объекта
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         "404":
           $ref: "#/components/responses/ProblemResponse"
 components:
@@ -153,7 +212,19 @@ components:
       description: Диагностический идентификатор HTTP-запроса
       schema:
         type: string
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
   parameters:
+    RequestID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >-
+        Диагностический идентификатор клиента. Если значение отсутствует или не
+        проходит безопасную проверку, API создаёт новый идентификатор и возвращает
+        его в одноимённом заголовке ответа.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
     InvestigationID:
       name: investigation_id
       in: path
@@ -163,6 +234,13 @@ components:
         format: uuid
     ClaimID:
       name: claim_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ArtifactID:
+      name: artifact_id
       in: path
       required: true
       schema:
@@ -179,6 +257,9 @@ components:
   responses:
     ProblemResponse:
       description: Ошибка выполнения запроса
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
       content:
         application/problem+json:
           schema:
@@ -198,6 +279,7 @@ components:
       required: [status, checks]
       properties:
         status:
+          type: string
           enum: [ready, not_ready]
         checks:
           type: object
@@ -209,6 +291,7 @@ components:
       required: [type, name]
       properties:
         type:
+          type: string
           enum: [person, organization]
         name:
           type: string
@@ -234,6 +317,7 @@ components:
           default: 50
         sources:
           type: array
+          minItems: 1
           uniqueItems: true
           items:
             type: string
@@ -256,8 +340,10 @@ components:
           type: string
           format: uuid
         status:
+          type: string
           const: running
         stage:
+          type: string
           const: subject_discovery
         status_url:
           type: string
@@ -265,7 +351,8 @@ components:
     Investigation:
       type: object
       additionalProperties: false
-      required: [id, subject, status, stage, state_version, created_at, updated_at]
+      required:
+        [id, subject, status, stage, state_version, created_at, updated_at]
       properties:
         id:
           type: string
@@ -288,7 +375,18 @@ components:
     InvestigationStatus:
       type: object
       additionalProperties: false
-      required: [id, status, stage, state_version, progress, sources, requires_action, updated_at]
+      required:
+        - id
+        - status
+        - stage
+        - state_version
+        - progress
+        - sources
+        - requires_action
+        - pending_review_count
+        - reviews_url
+        - source_actions
+        - updated_at
       properties:
         id:
           type: string
@@ -303,86 +401,309 @@ components:
         progress:
           type: object
           additionalProperties: false
-          required: [completed_jobs, total_jobs]
+          required: [terminal_jobs, known_jobs]
           properties:
-            completed_jobs:
+            terminal_jobs:
               type: integer
               minimum: 0
-            total_jobs:
+              description: Число заданий, достигших конечного состояния
+            known_jobs:
               type: integer
               minimum: 0
+              description: >-
+                Число созданных к этому моменту заданий. Оно может увеличиваться
+                при переходе к enrichment и не используется как точный процент.
         sources:
           type: array
           items:
             $ref: "#/components/schemas/SourceStatus"
         requires_action:
           type: boolean
-        action_url:
+          description: Есть открытый review или действие по источнику
+        pending_review_count:
+          type: integer
+          minimum: 0
+        reviews_url:
           type: [string, "null"]
           format: uri-reference
+          description: Список reviews расследования; null, если открытых reviews нет
+        source_actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceAction"
         updated_at:
           type: string
           format: date-time
     SourceStatus:
       type: object
       additionalProperties: false
-      required: [source, status, attempt_no, updated_at]
+      required:
+        - source_code
+        - status
+        - active_job_count
+        - terminal_job_count
+        - known_job_count
+        - attempt_count
+        - error_code
+        - error_detail
+        - next_attempt_at
+        - updated_at
       properties:
-        source:
+        source_code:
           type: string
+          minLength: 1
         status:
-          $ref: "#/components/schemas/SourceJobState"
-        attempt_no:
+          $ref: "#/components/schemas/SourceAggregateState"
+        active_job_count:
           type: integer
           minimum: 0
+        terminal_job_count:
+          type: integer
+          minimum: 0
+        known_job_count:
+          type: integer
+          minimum: 0
+        attempt_count:
+          type: integer
+          minimum: 0
+          description: Общее число начатых попыток по заданиям этого источника
         error_code:
           type: [string, "null"]
+        error_detail:
+          type: [string, "null"]
+          description: Безопасное для пользователя описание последней существенной ошибки
+        next_attempt_at:
+          type: [string, "null"]
+          format: date-time
         updated_at:
           type: string
           format: date-time
+    SourceAction:
+      type: object
+      additionalProperties: false
+      required: [job_id, source_code, action_code, detail, action_url]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        action_code:
+          type: string
+          minLength: 1
+          description: Машиночитаемый код требуемого действия
+        detail:
+          type: string
+          minLength: 1
+          description: Безопасное и понятное описание действия
+        action_url:
+          type: [string, "null"]
+          format: uri-reference
     InvestigationState:
+      type: string
       enum: [created, running, completed, completed_partial, failed, cancelled]
     InvestigationStage:
-      enum: [subject_discovery, subject_resolution, enrichment, analysis, completed]
-    SourceJobState:
-      enum: [pending, queued, running, retry_wait, succeeded, not_found, action_required, unavailable, failed, cancelled]
+      type: string
+      enum:
+        [subject_discovery, subject_resolution, enrichment, analysis, completed]
+    SourceAggregateState:
+      type: string
+      description: >-
+        Сводное состояние всех заданий источника в расследовании. Это не состояние
+        отдельной строки source_jobs.
+      enum:
+        [
+          pending,
+          running,
+          retry_wait,
+          action_required,
+          succeeded,
+          not_found,
+          completed_partial,
+          unavailable,
+          failed,
+          cancelled,
+        ]
     ClaimEvidence:
       type: object
       additionalProperties: false
-      required: [claim_id, predicate, source_record_id, artifact, evidence_locator]
+      required:
+        [
+          claim,
+          source_record,
+          processing,
+          artifact,
+          evidence_locator,
+          evidence_excerpt,
+        ]
       properties:
-        claim_id:
-          type: string
-          format: uuid
-        predicate:
-          type: string
-        value: true
-        source_record_id:
-          type: string
-          format: uuid
+        claim:
+          $ref: "#/components/schemas/ClaimDetails"
+        source_record:
+          $ref: "#/components/schemas/SourceRecordDetails"
+        processing:
+          $ref: "#/components/schemas/ProcessingDetails"
         artifact:
-          type: object
-          additionalProperties: false
-          required: [id, media_type, sha256, retrieved_at]
-          properties:
-            id:
-              type: string
-              format: uuid
-            media_type:
-              type: string
-            sha256:
-              type: string
-              pattern: "^[a-fA-F0-9]{64}$"
-            retrieved_at:
-              type: string
-              format: date-time
+          $ref: "#/components/schemas/ArtifactDetails"
         evidence_locator:
           type: object
           minProperties: 1
+        evidence_excerpt:
+          type: [string, "null"]
+    ClaimDetails:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - subject_ref
+        - object_ref
+        - predicate
+        - value
+        - raw_value
+        - normalized_value
+        - qualifiers
+        - valid_from
+        - valid_to
+        - valid_from_precision
+        - valid_to_precision
+        - temporal_basis
+        - snapshot_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [attribute, relationship, event]
+        subject_ref:
+          type: string
+          minLength: 1
+          description: Локальная ссылка исходной записи на субъект утверждения
+        object_ref:
+          type: [string, "null"]
+          description: Локальная ссылка на объект relationship claim
+        predicate:
+          type: string
+          minLength: 1
+        value:
+          description: Типизированное значение утверждения или null для relationship claim
+        raw_value:
+          description: Исходное значение без нормализации
+        normalized_value:
+          description: Нормализованное значение, если оно построено
+        qualifiers:
+          type: object
+        valid_from:
+          type: [string, "null"]
+          format: date
+          description: Каноническая дата-якорь; точность задаётся отдельным полем
+        valid_to:
+          type: [string, "null"]
+          format: date
+          description: Исключающая верхняя граница или её каноническая дата-якорь
+        valid_from_precision:
+          $ref: "#/components/schemas/DatePrecision"
+        valid_to_precision:
+          $ref: "#/components/schemas/DatePrecision"
+        temporal_basis:
+          $ref: "#/components/schemas/TemporalBasis"
+        snapshot_at:
+          type: [string, "null"]
+          format: date-time
+    SourceRecordDetails:
+      type: object
+      additionalProperties: false
+      required: [id, source_code, record_type, external_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        record_type:
+          type: string
+          minLength: 1
+        external_id:
+          type: [string, "null"]
+    ProcessingDetails:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          schema_version,
+          adapter_version,
+          parser_version,
+          mapping_version,
+          normalization_version,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        schema_version:
+          type: string
+        adapter_version:
+          type: string
+        parser_version:
+          type: string
+        mapping_version:
+          type: string
+        normalization_version:
+          type: string
+    ArtifactDetails:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          kind,
+          media_type,
+          sha256,
+          byte_size,
+          source_uri,
+          published_at,
+          retrieved_at,
+          content_url,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        media_type:
+          type: string
+        sha256:
+          type: string
+          pattern: "^[a-fA-F0-9]{64}$"
+        byte_size:
+          type: integer
+          minimum: 0
+        source_uri:
+          type: string
+        published_at:
+          type: [string, "null"]
+          format: date-time
+        retrieved_at:
+          type: string
+          format: date-time
+        content_url:
+          type: string
+          format: uri-reference
+    DatePrecision:
+      type: string
+      enum: [day, month, year, approximate, unknown]
+    TemporalBasis:
+      type: string
+      enum: [explicit, event_derived, snapshot, computed, unknown]
     Problem:
       type: object
       additionalProperties: true
-      required: [type, title, status]
+      required: [type, title, status, code, detail]
       properties:
         type:
           type: string
@@ -395,8 +716,10 @@ components:
           maximum: 599
         detail:
           type: string
+          minLength: 1
         instance:
           type: string
           format: uri-reference
         code:
           type: string
+          minLength: 1

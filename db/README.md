@@ -1,9 +1,8 @@
 # База данных GraphX
 
-`migrations/` содержит вручную написанные SQL-миграции goose. Схема не создаётся при старте API и не управляется ORM/AutoMigrate.
+`migrations/` содержит вручную написанные SQL-миграции goose. Схема не управляется ORM/AutoMigrate.
 
 План последовательности миграций:
-
 1. расширения PostgreSQL, `investigations`, `sources`;
 2. `source_jobs`, outbox, inbox, business deduplication и API idempotency;
 3. `artifacts`, `job_artifacts`, `processing_runs`, `source_records`, `claims`;
