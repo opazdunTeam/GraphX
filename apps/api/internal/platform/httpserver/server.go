@@ -41,7 +41,7 @@ func requestLogger(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()
 		traceID := c.GetHeader("X-Request-ID")
-		if traceID == "" {
+		if !validRequestID(traceID) {
 			traceID = newTraceID()
 		}
 		c.Header("X-Request-ID", traceID)
@@ -54,6 +54,23 @@ func requestLogger(logger *slog.Logger) gin.HandlerFunc {
 			"duration_ms", time.Since(started).Milliseconds(),
 		)
 	}
+}
+
+func validRequestID(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for i := range len(value) {
+		char := value[i]
+		if (char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '.' || char == '_' || char == ':' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func newTraceID() string {

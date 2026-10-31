@@ -2,16 +2,15 @@
 
 Стартовая структура модульного монолита на Go. API владеет HTTP, orchestration, PostgreSQL business state, ingestion результатов workers, entity resolution и read models.
 
-Планируемые entrypoints:
-
+Планируемые энтрипоинты:
 - `cmd/api` - Gin HTTP adapter;
 - `cmd/consumer` - обработка событий workers;
 - внутренние предметные модули располагаются в `internal/<area>`;
 - интеграционный код PostgreSQL, RabbitMQ и MinIO остаётся в adapter/platform слоях.
 
-Предметный код не должен импортировать Gin, pgx или RabbitMQ SDK. Все команды ниже выполняются из корня репозитория.
-
 ## Запуск и проверка
+
+Все команды ниже выполняются из корня репозитория.
 
 ### Windows (PowerShell)
 
