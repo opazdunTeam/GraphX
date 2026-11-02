@@ -14,11 +14,9 @@
 - `events.topic` - результаты и события обработки;
 - `dead-letter.topic` - сообщения, которые не удалось обработать;
 - `source.collect.q` - обычный сбор;
-- `document.parse.q` - разбор документов;
-- `browser.collect.q` - только для источников, которым действительно нужен браузер;
 - `core.events.q` - результаты для Go consumer.
 
-Каждая рабочая очередь имеет DLQ. Браузерная очередь и отдельный процесс не обязательны до появления такого адаптера.
+Каждая рабочая очередь имеет DLQ. Очереди `document.parse.q` и `browser.collect.q` добавляются только при выделении соответствующей работы в отдельный процесс.
 
 ## Формат сообщения
 
@@ -38,45 +36,50 @@
 }
 ```
 
-Точные форматы первой версии находятся в `contracts/schemas/messages`, а ingest-результат - в `contracts/schemas/ingestion/source-result.v1.schema.json`. Поле вида сообщения во всех схемах называется `type`.
+Точные форматы первой версии находятся в `contracts/schemas/messages`, а ingest-результаты - в `contracts/schemas/ingestion`. Поле вида сообщения во всех схемах называется `type`. Готовые примеры находятся в `contracts/examples`.
 
-Команда сбора самодостаточна: worker получает `job_id`, `attempt_no`, investigation, source, operation, purpose, query, limits и deadline. Ему не требуется доступ к PostgreSQL.
+Команда сбора самодостаточна: worker получает `job_id`, `attempt_no`, investigation, source, operation, purpose, query, три явных ограничения (`max_records`, `max_bytes`, `timeout_seconds`) и deadline. Ему не требуется доступ к PostgreSQL или локальным значениям лимитов по умолчанию.
+
+`query` имеет общую минимальную форму из `source-query.v1.schema.json`: вид субъекта (`person` или `organization`) и хотя бы исходное имя либо один известный идентификатор. Она совпадает с `SubjectInput` в OpenAPI. Поля, специфичные для источника, не протекают в общий транспорт: adapter выбирает способ запроса по `source` и `operation`, а неподдерживаемую операцию отклоняет стабильной ошибкой.
+
+Допустимые назначения команды: `subject_discovery`, `enrichment` и `branch_expansion`. Повторный разбор сохранённого artifact не является сбором источника и получит отдельный контракт, когда появится соответствующий обработчик.
 
 Результат содержит outcome, `record_count`, ссылки на объекты MinIO или manifest, версии adapter/parser/mapping/normalization, digest и предупреждения. Идентификаторы строк `artifacts` назначает Go consumer после проверки результата. Точные поля records и claims определяет ingest-схема.
 
 Есть два взаимоисключающих режима результата:
 
 - inline - `manifest` отсутствует, records и claims находятся в сообщении, а `record_count` равен числу records;
-- manifest - ссылка имеет `kind = manifest`, records и claims в сообщении пусты, а `record_count` описывает содержимое manifest.
+- manifest - ссылка имеет `kind = manifest`, records и claims в сообщении пусты, а `record_count` описывает содержимое manifest по схеме `source-result-manifest.v1.schema.json`.
 
-В обоих режимах сохраняется хотя бы один исходный artifact либо сам manifest. `not_found` имеет `record_count = 0` и не содержит records или claims, но сохраняет исходный ответ источника. Runtime вычисляет `digest` после формирования результата: это SHA-256 канонического JSON тела результата без самого поля `digest`, сериализованного по JSON Canonicalization Scheme. Envelope сообщения в digest не входит.
+Manifest содержит собственную версию схемы, `job_id`, `attempt_no`, `record_count`, records и claims. Его `job_id`, `attempt_no` и `record_count` обязаны совпадать с сообщением, а SHA-256 файла - со ссылкой на artifact. Manifest переносит производные данные, но не заменяет исходные материалы: ссылки на них остаются в `artifacts`. Эти проверки выполняет consumer после загрузки объекта.
 
-JSON Schema проверяет переносимую форму сообщения. После неё worker и Go выполняют семантическую проверку: режим manifest не смешивается с inline-данными, `record_count` согласован с records, claim не пуст, временные даты соответствуют precision, а локальные ссылки разрешаются внутри результата. Эти правила остаются кодом доменной границы и не требуют превращать JSON Schema в язык бизнес-логики.
+В обоих режимах сохраняется хотя бы один исходный artifact. Каждый artifact имеет уникальный в пределах результата `local_ref`, а каждый source record указывает свой `artifact_local_ref`. Так Go однозначно создаёт processing run для материала и сохраняет цепочку provenance. `not_found` имеет `record_count = 0`, не содержит manifest, records или claims, но сохраняет исходный ответ источника. Runtime вычисляет `digest` после формирования результата: это SHA-256 канонического JSON тела результата без самого поля `digest`, сериализованного по JSON Canonicalization Scheme. Envelope сообщения в digest не входит.
+
+JSON Schema проверяет переносимую форму сообщения. После неё worker и Go выполняют семантическую проверку: режим manifest не смешивается с inline-данными, `record_count` согласован с records, claim не пуст, временные даты соответствуют precision, локальные ссылки records и claims уникальны, а ссылки на artifacts и records разрешаются внутри результата. Эти правила остаются кодом доменной границы и не требуют превращать JSON Schema в язык бизнес-логики.
 
 ## Жизненный цикл задания
 
 1. Go в одной транзакции создаёт `source_job` со статусом `pending` и outbox message.
 2. Publisher блокирует порцию outbox-записей, отправляет сообщения и ждёт publisher confirm.
-3. После confirm outbox помечается опубликованным. Job переходит `pending -> queued` только условным обновлением: если consumer уже применил `started` или результат, его состояние не меняется.
-4. Worker получает команду и при необходимости сообщает `started`.
+3. После confirm outbox помечается опубликованным. Job переходит `pending -> queued` только условным обновлением: если consumer уже применил итоговый результат, его состояние не меняется.
+4. Worker получает команду. Отдельное событие начала работы в обязательный контракт MVP не входит.
 5. Worker сохраняет исходные данные и публикует `completed` либо `failed` с классом ошибки.
 6. Go consumer сначала регистрирует `message_id` в inbox, затем под блокировкой проверяет job и номер попытки. Актуальный результат разрешено применять из `pending`, потому что его получение подтверждает публикацию команды.
 7. Результат применяется один раз, а job получает итоговый статус.
 
-Только Go меняет `source_jobs`. Publisher обновляет статус через `UPDATE ... WHERE status = 'pending'`, поэтому не может вернуть уже начатое или завершённое задание в `queued`. При временной ошибке Go consumer назначает следующую попытку, переводит job в `retry_wait` и при наступлении `next_attempt_at` создаёт новую команду через outbox. Событие `retry_scheduled` при необходимости публикует Go, а не worker.
+Только Go меняет `source_jobs`. Publisher обновляет статус через `UPDATE ... WHERE status = 'pending'`, поэтому не может вернуть уже завершённое задание в `queued`. При временной ошибке Go consumer назначает следующую попытку, переводит job в `retry_wait` и при наступлении `next_attempt_at` создаёт новую команду через outbox.
 
 ## Типы сообщений
 
-- `source.collect.requested.v1`;
-- `source.collect.started.v1`;
-- `source.collect.retry_scheduled.v1`;
-- `source.collect.completed.v1`;
-- `source.collect.failed.v1`;
-- `document.parse.requested.v1`;
-- `document.parse.completed.v1`;
-- `browser.collect.requested.v1`.
+Для MVP зафиксированы только три межкомпонентных сообщения:
 
-Для самого первого среза `started` и `retry_scheduled` можно не публиковать: достаточно `requested` и одного итогового события. Они добавляются, когда появятся долгие задания и реальные повторы.
+- `source.collect.requested.v1`;
+- `source.collect.completed.v1`;
+- `source.collect.failed.v1`.
+
+Новая попытка использует новую команду `source.collect.requested.v1` с увеличенным `attempt_no`; отдельное сообщение `retry_scheduled` для этого не требуется. Состояние `running` можно добавить через `source.collect.started.v1`, если длительность реальных заданий покажет пользу такого события.
+
+Отдельные `document.parse.*` и `browser.collect.*` не входят в обязательный контракт MVP. Единый Python runtime может загрузить и разобрать документ внутри одного задания источника. Новые типы сообщений появляются только при фактическом выделении отдельного процесса или очереди.
 
 ## Идемпотентность
 
@@ -98,7 +101,7 @@ ACK отправляется только после успешной транз
 - `action_required` - например CAPTCHA или ручное действие;
 - программные ошибки.
 
-Worker передаёт стабильный `code`, безопасный `message`, classification и при необходимости `retry_after_seconds`. Runtime получает classification из общего каталога кодов SDK, а не выбирает её отдельно в каждом адаптере. Go отображает результат так:
+Worker передаёт стабильный `code`, безопасный `message`, `adapter_version`, classification, список уже сохранённых artifacts и при необходимости `retry_after_seconds`. При сетевой ошибке список artifacts может быть пустым; при ошибке формата или валидации уже полученный исходный ответ сохраняется и передаётся вместе с ошибкой. Так объект в MinIO не остаётся без регистрации, сохраняет версию адаптера и может быть повторно разобран после его исправления. Первая версия контракта допускает только коды `SOURCE_TIMEOUT`, `SOURCE_NETWORK_ERROR`, `SOURCE_RATE_LIMITED`, `SOURCE_UNAVAILABLE`, `SOURCE_ACCESS_DENIED`, `SOURCE_ACTION_REQUIRED`, `SOURCE_FORMAT_CHANGED`, `SOURCE_INVALID_RESPONSE`, `SOURCE_UNSUPPORTED_OPERATION`, `CONTRACT_VALIDATION_FAILED` и `INTERNAL_ADAPTER_ERROR`. Runtime получает classification из общего каталога кодов SDK, а не выбирает её отдельно в каждом адаптере. Consumer проверяет согласованность code и classification. Go отображает результат следующим образом:
 
 | Classification    | Действие Go                                                               |
 | ----------------- | ------------------------------------------------------------------------- |
@@ -114,4 +117,4 @@ Worker передаёт стабильный `code`, безопасный `messa
 
 ## Отмена
 
-Новое задание для отменённого расследования не публикуется. Worker должен проверять cancellation между длительными шагами. Поздний результат сохраняется как обработанный, но получает `applied = false`; сущности и связи из него автоматически не создаются.
+Новое задание для отменённого расследования не публикуется. Отдельной команды отмены worker в MVP нет: уже начатый внешний запрос может закончиться по своему deadline. Поздний результат регистрируется как обработанный, но получает `applied = false`; сущности и связи из него автоматически не создаются. Активная кооперативная отмена добавляется только вместе с отдельным доказанным механизмом доставки cancellation.

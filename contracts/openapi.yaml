@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: GraphX API
-  version: 0.1.0
+  version: 0.2.0
   license:
     name: MIT
     identifier: MIT
@@ -18,6 +18,14 @@ tags:
     description: Проверка процесса API и обязательных зависимостей
   - name: investigations
     description: Создание расследования и чтение его состояния
+  - name: sources
+    description: Доступные источники и их возможности
+  - name: reviews
+    description: Проверка неоднозначных совпадений
+  - name: entities
+    description: Канонические сущности и расширение исследования
+  - name: knowledge
+    description: Граф, временная шкала и фактические связи
   - name: evidence
     description: Происхождение утверждений и доступ к сохранённым материалам
 paths:
@@ -157,6 +165,290 @@ paths:
           $ref: "#/components/responses/ProblemResponse"
         "409":
           $ref: "#/components/responses/ProblemResponse"
+  /sources:
+    get:
+      operationId: listSources
+      summary: Получить доступные источники
+      tags: [sources]
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: Каталог источников, доступных для новых расследований
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceCatalog"
+        "500":
+          $ref: "#/components/responses/ProblemResponse"
+  /investigations/{investigation_id}/reviews:
+    get:
+      operationId: listInvestigationReviews
+      summary: Получить проверки совпадений расследования
+      tags: [reviews]
+      parameters:
+        - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ReviewState"
+      responses:
+        "200":
+          description: Страница проверок совпадений
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewPage"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /reviews/{review_id}:
+    get:
+      operationId: getReview
+      summary: Получить проверку и кандидатов
+      tags: [reviews]
+      parameters:
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: Проверка исходной записи и возможных совпадений
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchReview"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /reviews/{review_id}/decision:
+    post:
+      operationId: decideReview
+      summary: Принять решение о совпадении
+      tags: [reviews]
+      parameters:
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewDecisionRequest"
+      responses:
+        "200":
+          description: Решение сохранено
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewDecisionResult"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+        "409":
+          $ref: "#/components/responses/ProblemResponse"
+  /reviews/{review_id}/decision/revert:
+    post:
+      operationId: revertReviewDecision
+      summary: Отменить последнее решение о совпадении
+      tags: [reviews]
+      parameters:
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevertReviewDecisionRequest"
+      responses:
+        "200":
+          description: Решение отменено, review снова требует проверки
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchReview"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+        "409":
+          $ref: "#/components/responses/ProblemResponse"
+  /investigations/{investigation_id}/entities:
+    get:
+      operationId: listInvestigationEntities
+      summary: Получить сущности расследования
+      tags: [entities]
+      parameters:
+        - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: Страница сущностей расследования
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvestigationEntityPage"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /entities/{entity_id}:
+    get:
+      operationId: getEntity
+      summary: Получить карточку сущности
+      tags: [entities]
+      parameters:
+        - $ref: "#/components/parameters/EntityID"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: Каноническая сущность и её подтверждённые данные
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityDetails"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /entities/{entity_id}/expand:
+    post:
+      operationId: expandEntity
+      summary: Запросить расширение ветви от сущности
+      tags: [entities]
+      parameters:
+        - $ref: "#/components/parameters/EntityID"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpandEntityRequest"
+      responses:
+        "202":
+          description: Расширение принято в работу
+          headers:
+            Location:
+              description: Адрес статуса расследования
+              schema:
+                type: string
+                format: uri-reference
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpansionAccepted"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+        "409":
+          $ref: "#/components/responses/ProblemResponse"
+  /investigations/{investigation_id}/graph:
+    get:
+      operationId: getInvestigationGraph
+      summary: Получить компактный граф расследования
+      tags: [knowledge]
+      parameters:
+        - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
+        - name: include_derived
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: include_hypotheses
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Ограниченная проекция графа для интерфейса
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvestigationGraph"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /investigations/{investigation_id}/timeline:
+    get:
+      operationId: getInvestigationTimeline
+      summary: Получить временную шкалу расследования
+      tags: [knowledge]
+      parameters:
+        - $ref: "#/components/parameters/InvestigationID"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: События, снимки и интервалы без повышения точности дат
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvestigationTimeline"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
+  /relationships/{relationship_id}:
+    get:
+      operationId: getRelationship
+      summary: Получить фактическую связь и её доказательства
+      tags: [knowledge]
+      parameters:
+        - $ref: "#/components/parameters/RelationshipID"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "200":
+          description: Каноническая фактическая связь
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDetails"
+        "404":
+          $ref: "#/components/responses/ProblemResponse"
   /claims/{claim_id}/evidence:
     get:
       operationId: getClaimEvidence
@@ -246,6 +538,45 @@ components:
       schema:
         type: string
         format: uuid
+    ReviewID:
+      name: review_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    EntityID:
+      name: entity_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RelationshipID:
+      name: relationship_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Непрозрачный указатель на следующую страницу
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    PageLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -288,7 +619,7 @@ components:
     SubjectInput:
       type: object
       additionalProperties: false
-      required: [type, name]
+      required: [type]
       properties:
         type:
           type: string
@@ -299,8 +630,15 @@ components:
           maxLength: 500
         identifiers:
           type: object
+          minProperties: 1
+          propertyNames:
+            minLength: 1
           additionalProperties:
             type: string
+            minLength: 1
+      anyOf:
+        - required: [name]
+        - required: [identifiers]
     InvestigationLimits:
       type: object
       additionalProperties: false
@@ -525,6 +863,973 @@ components:
           failed,
           cancelled,
         ]
+    SourceCatalog:
+      type: object
+      additionalProperties: false
+      required: [items, updated_at]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceCatalogItem"
+        updated_at:
+          type: string
+          format: date-time
+    SourceCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [code, name, enabled, mode, roles, entity_types, health]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        enabled:
+          type: boolean
+        mode:
+          type: string
+          enum: [api, bulk, file, http, browser, manual]
+        roles:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [discovery, enrichment, evidence, verification]
+        entity_types:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/EntityType"
+        health:
+          $ref: "#/components/schemas/SourceHealth"
+    SourceHealth:
+      type: object
+      additionalProperties: false
+      required: [state, observed_at, last_success_at, error_code, error_detail]
+      properties:
+        state:
+          type: string
+          enum: [healthy, degraded, unavailable, action_required, unknown]
+        observed_at:
+          type: [string, "null"]
+          format: date-time
+        last_success_at:
+          type: [string, "null"]
+          format: date-time
+        error_code:
+          type: [string, "null"]
+        error_detail:
+          type: [string, "null"]
+          description: Безопасное описание без секретов и исходного ответа
+    ReviewState:
+      type: string
+      enum: [open, decided]
+    ReviewPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewSummary"
+        next_cursor:
+          type: [string, "null"]
+    ReviewSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          investigation_id,
+          source_record,
+          status,
+          lock_version,
+          candidate_count,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        investigation_id:
+          type: string
+          format: uuid
+        source_record:
+          $ref: "#/components/schemas/SourceRecordSummary"
+        status:
+          $ref: "#/components/schemas/ReviewState"
+        lock_version:
+          type: integer
+          minimum: 1
+        candidate_count:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SourceRecordReview:
+      type: object
+      additionalProperties: false
+      required:
+        [id, source_code, record_type, display_name, external_id, attributes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        record_type:
+          type: string
+          minLength: 1
+        display_name:
+          type: [string, "null"]
+        external_id:
+          type: [string, "null"]
+        attributes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewAttribute"
+    ReviewAttribute:
+      type: object
+      additionalProperties: false
+      required:
+        [predicate, value, raw_value, normalized_value, claim_id, evidence_url]
+      properties:
+        predicate:
+          type: string
+          minLength: 1
+        raw_value: {}
+        normalized_value: {}
+        value: {}
+        claim_id:
+          type: string
+          format: uuid
+        evidence_url:
+          type: string
+          format: uri-reference
+    SourceRecordSummary:
+      type: object
+      additionalProperties: false
+      required: [id, source_code, record_type, display_name, external_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        record_type:
+          type: string
+          minLength: 1
+        display_name:
+          type: [string, "null"]
+        external_id:
+          type: [string, "null"]
+    MatchReview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - investigation_id
+        - source_record
+        - status
+        - lock_version
+        - algorithm_version
+        - candidates
+        - decision
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        investigation_id:
+          type: string
+          format: uuid
+        source_record:
+          $ref: "#/components/schemas/SourceRecordReview"
+        status:
+          $ref: "#/components/schemas/ReviewState"
+        lock_version:
+          type: integer
+          minimum: 1
+        algorithm_version:
+          type: string
+          minLength: 1
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchCandidate"
+        decision:
+          oneOf:
+            - $ref: "#/components/schemas/ReviewDecision"
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    MatchCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, entity, score, recommendation, features, conflicts]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity:
+          $ref: "#/components/schemas/EntitySummary"
+        score:
+          type: number
+          description: Технический score ранжирования, а не вероятность совпадения
+        recommendation:
+          type: string
+          enum: [auto_link, review, reject]
+        features:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchFeature"
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchConflict"
+    MatchFeature:
+      type: object
+      additionalProperties: false
+      required: [code, label, strength, outcome, explanation]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        strength:
+          type: string
+          enum: [strong, medium, weak]
+        outcome:
+          type: string
+          enum: [match, mismatch, unknown]
+        explanation:
+          type: string
+          minLength: 1
+    MatchConflict:
+      type: object
+      additionalProperties: false
+      required: [code, blocking, explanation]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        blocking:
+          type: boolean
+        explanation:
+          type: string
+          minLength: 1
+    ReviewDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version, decision, candidate_id, reason]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        decision:
+          type: string
+          enum: [select_candidate, none_of_above]
+        candidate_id:
+          type: [string, "null"]
+          format: uuid
+        reason:
+          type: [string, "null"]
+          maxLength: 2000
+      oneOf:
+        - required: [decision, candidate_id]
+          properties:
+            decision:
+              const: select_candidate
+            candidate_id:
+              type: string
+              format: uuid
+        - required: [decision, candidate_id]
+          properties:
+            decision:
+              const: none_of_above
+            candidate_id:
+              type: "null"
+    RevertReviewDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version, reason]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    ReviewDecision:
+      type: object
+      additionalProperties: false
+      required: [id, decision, candidate_id, entity_id, reason, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [select_candidate, none_of_above]
+        candidate_id:
+          type: [string, "null"]
+          format: uuid
+        entity_id:
+          type: [string, "null"]
+          format: uuid
+        reason:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+      oneOf:
+        - required: [decision, candidate_id]
+          properties:
+            decision:
+              const: select_candidate
+            candidate_id:
+              type: string
+              format: uuid
+        - required: [decision, candidate_id]
+          properties:
+            decision:
+              const: none_of_above
+            candidate_id:
+              type: "null"
+    ReviewDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [review, resolved_entity_id, enrichment_scheduled]
+      properties:
+        review:
+          $ref: "#/components/schemas/MatchReview"
+        resolved_entity_id:
+          type: [string, "null"]
+          format: uuid
+        enrichment_scheduled:
+          type: boolean
+    EntityType:
+      type: string
+      enum: [person, organization]
+    EntityState:
+      type: string
+      enum: [active]
+    EntitySummary:
+      type: object
+      additionalProperties: false
+      required: [id, type, display_name, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/EntityType"
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          $ref: "#/components/schemas/EntityState"
+    InvestigationEntityPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvestigationEntity"
+        next_cursor:
+          type: [string, "null"]
+    InvestigationEntity:
+      type: object
+      additionalProperties: false
+      required: [entity, depth, added_reason]
+      properties:
+        entity:
+          $ref: "#/components/schemas/EntitySummary"
+        depth:
+          type: integer
+          minimum: 0
+        added_reason:
+          type: string
+          enum: [root, resolution, relationship, expansion]
+    EntityDetails:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          type,
+          display_name,
+          status,
+          names,
+          identifiers,
+          attributes,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/EntityType"
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          $ref: "#/components/schemas/EntityState"
+        names:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityName"
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityIdentifier"
+        attributes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityAttribute"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EntityName:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          raw,
+          normalized,
+          language,
+          script,
+          variant_type,
+          claim_id,
+          evidence_url,
+        ]
+      properties:
+        raw:
+          type: string
+          minLength: 1
+        normalized:
+          type: string
+          minLength: 1
+        language:
+          type: [string, "null"]
+        script:
+          type: [string, "null"]
+        variant_type:
+          type: string
+          minLength: 1
+        claim_id:
+          type: string
+          format: uuid
+        evidence_url:
+          type: string
+          format: uri-reference
+    EntityIdentifier:
+      type: object
+      additionalProperties: false
+      required: [type, value, jurisdiction, issuer, claim_id, evidence_url]
+      properties:
+        type:
+          type: string
+          minLength: 1
+        value:
+          type: string
+          minLength: 1
+        jurisdiction:
+          type: [string, "null"]
+        issuer:
+          type: [string, "null"]
+        claim_id:
+          type: string
+          format: uuid
+        evidence_url:
+          type: string
+          format: uri-reference
+    EntityAttribute:
+      type: object
+      additionalProperties: false
+      required:
+        [predicate, value, claim_id, source_code, temporal, evidence_url]
+      properties:
+        predicate:
+          type: string
+          minLength: 1
+        value:
+          not:
+            type: "null"
+        claim_id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        temporal:
+          $ref: "#/components/schemas/TemporalSpan"
+        evidence_url:
+          type: string
+          format: uri-reference
+    ExpandEntityRequest:
+      type: object
+      additionalProperties: false
+      required: [investigation_id, expected_state_version]
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        expected_state_version:
+          type: integer
+          minimum: 1
+        sources:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+    ExpansionAccepted:
+      type: object
+      additionalProperties: false
+      required: [investigation_id, entity_id, status, state_version, status_url]
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        entity_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: running
+        state_version:
+          type: integer
+          minimum: 1
+        status_url:
+          type: string
+          format: uri-reference
+    TemporalSpan:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          valid_from,
+          valid_to,
+          valid_from_precision,
+          valid_to_precision,
+          temporal_basis,
+          snapshot_at,
+        ]
+      properties:
+        valid_from:
+          type: [string, "null"]
+          format: date
+        valid_to:
+          type: [string, "null"]
+          format: date
+        valid_from_precision:
+          $ref: "#/components/schemas/DatePrecision"
+        valid_to_precision:
+          $ref: "#/components/schemas/DatePrecision"
+        temporal_basis:
+          $ref: "#/components/schemas/TemporalBasis"
+        snapshot_at:
+          type: [string, "null"]
+          format: date-time
+      allOf:
+        - if:
+            properties:
+              valid_from_precision:
+                const: unknown
+          then:
+            properties:
+              valid_from:
+                type: "null"
+          else:
+            properties:
+              valid_from:
+                type: string
+                format: date
+        - if:
+            properties:
+              valid_to_precision:
+                const: unknown
+          then:
+            properties:
+              valid_to:
+                type: "null"
+          else:
+            properties:
+              valid_to:
+                type: string
+                format: date
+        - if:
+            properties:
+              temporal_basis:
+                const: snapshot
+          then:
+            properties:
+              valid_from:
+                type: "null"
+              valid_to:
+                type: "null"
+              valid_from_precision:
+                const: unknown
+              valid_to_precision:
+                const: unknown
+              snapshot_at:
+                type: string
+                format: date-time
+          else:
+            properties:
+              snapshot_at:
+                type: "null"
+        - if:
+            properties:
+              temporal_basis:
+                const: unknown
+          then:
+            properties:
+              valid_from:
+                type: "null"
+              valid_to:
+                type: "null"
+              snapshot_at:
+                type: "null"
+    EvidenceSummary:
+      type: object
+      additionalProperties: false
+      required: [claim_id, source_code, excerpt, evidence_url]
+      properties:
+        claim_id:
+          type: string
+          format: uuid
+        source_code:
+          type: string
+          minLength: 1
+        excerpt:
+          type: [string, "null"]
+        evidence_url:
+          type: string
+          format: uri-reference
+    RelationshipDetails:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          type,
+          source,
+          target,
+          source_role,
+          target_role,
+          share,
+          attributes,
+          temporal,
+          evidence,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/EntitySummary"
+        target:
+          $ref: "#/components/schemas/EntitySummary"
+        source_role:
+          type: [string, "null"]
+        target_role:
+          type: [string, "null"]
+        share:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Доля в процентах от 0 до 100, если источник её сообщает
+        attributes:
+          type: object
+        temporal:
+          $ref: "#/components/schemas/TemporalSpan"
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceSummary"
+    InvestigationGraph:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          investigation_id,
+          state_version,
+          generated_at,
+          nodes,
+          factual_edges,
+          derived_edges,
+          hypotheses,
+          incomplete,
+          unavailable_sources,
+        ]
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        state_version:
+          type: integer
+          minimum: 1
+        generated_at:
+          type: string
+          format: date-time
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        factual_edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/FactualGraphEdge"
+        derived_edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/DerivedGraphEdge"
+        hypotheses:
+          type: array
+          items:
+            $ref: "#/components/schemas/HypothesisGraphEdge"
+        incomplete:
+          type: boolean
+        unavailable_sources:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+    GraphNode:
+      type: object
+      additionalProperties: false
+      required: [entity, root, depth]
+      properties:
+        entity:
+          $ref: "#/components/schemas/EntitySummary"
+        root:
+          type: boolean
+        depth:
+          type: integer
+          minimum: 0
+    FactualGraphEdge:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          relationship_id,
+          source_entity_id,
+          target_entity_id,
+          type,
+          source_role,
+          target_role,
+          share,
+          temporal,
+          evidence,
+        ]
+      properties:
+        relationship_id:
+          type: string
+          format: uuid
+        source_entity_id:
+          type: string
+          format: uuid
+        target_entity_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          minLength: 1
+        source_role:
+          type: [string, "null"]
+        target_role:
+          type: [string, "null"]
+        share:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Доля в процентах от 0 до 100, если она относится к связи
+        temporal:
+          $ref: "#/components/schemas/TemporalSpan"
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceSummary"
+    DerivedGraphEdge:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          key,
+          source_entity_id,
+          target_entity_id,
+          type,
+          rule_code,
+          rule_version,
+          explanation,
+          supporting_relationship_ids,
+          supporting_claim_ids,
+          evidence,
+        ]
+      properties:
+        key:
+          type: string
+          minLength: 1
+        source_entity_id:
+          type: string
+          format: uuid
+        target_entity_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          minLength: 1
+        rule_code:
+          type: string
+          minLength: 1
+        rule_version:
+          type: string
+          minLength: 1
+        explanation:
+          type: string
+          minLength: 1
+        supporting_relationship_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        supporting_claim_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceSummary"
+      anyOf:
+        - properties:
+            supporting_relationship_ids:
+              type: array
+              minItems: 1
+        - properties:
+            supporting_claim_ids:
+              type: array
+              minItems: 1
+    HypothesisGraphEdge:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          key,
+          source_entity_id,
+          target_entity_id,
+          type,
+          explanation,
+          supporting_claim_ids,
+          evidence,
+        ]
+      properties:
+        key:
+          type: string
+          minLength: 1
+        source_entity_id:
+          type: string
+          format: uuid
+        target_entity_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          minLength: 1
+        explanation:
+          type: string
+          minLength: 1
+        supporting_claim_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceSummary"
+    InvestigationTimeline:
+      type: object
+      additionalProperties: false
+      required: [investigation_id, state_version, items]
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+        state_version:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineItem"
+    TimelineItem:
+      type: object
+      additionalProperties: false
+      required: [key, kind, title, subject, related_entity, temporal, evidence]
+      properties:
+        key:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum: [event, interval, snapshot]
+        title:
+          type: string
+          minLength: 1
+        subject:
+          $ref: "#/components/schemas/EntitySummary"
+        related_entity:
+          oneOf:
+            - $ref: "#/components/schemas/EntitySummary"
+            - type: "null"
+        temporal:
+          $ref: "#/components/schemas/TemporalSpan"
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EvidenceSummary"
     ClaimEvidence:
       type: object
       additionalProperties: false
@@ -560,16 +1865,10 @@ components:
         - subject_ref
         - object_ref
         - predicate
-        - value
         - raw_value
         - normalized_value
         - qualifiers
-        - valid_from
-        - valid_to
-        - valid_from_precision
-        - valid_to_precision
-        - temporal_basis
-        - snapshot_at
+        - temporal
       properties:
         id:
           type: string
@@ -587,31 +1886,14 @@ components:
         predicate:
           type: string
           minLength: 1
-        value:
-          description: Типизированное значение утверждения или null для relationship claim
         raw_value:
-          description: Исходное значение без нормализации
+          description: Исходное значение утверждения без нормализации
         normalized_value:
           description: Нормализованное значение, если оно построено
         qualifiers:
           type: object
-        valid_from:
-          type: [string, "null"]
-          format: date
-          description: Каноническая дата-якорь; точность задаётся отдельным полем
-        valid_to:
-          type: [string, "null"]
-          format: date
-          description: Исключающая верхняя граница или её каноническая дата-якорь
-        valid_from_precision:
-          $ref: "#/components/schemas/DatePrecision"
-        valid_to_precision:
-          $ref: "#/components/schemas/DatePrecision"
-        temporal_basis:
-          $ref: "#/components/schemas/TemporalBasis"
-        snapshot_at:
-          type: [string, "null"]
-          format: date-time
+        temporal:
+          $ref: "#/components/schemas/TemporalSpan"
     SourceRecordDetails:
       type: object
       additionalProperties: false
@@ -675,16 +1957,19 @@ components:
           format: uuid
         kind:
           type: string
+          enum: [raw_response, document, manifest, screenshot, other]
         media_type:
           type: string
+          minLength: 1
         sha256:
           type: string
-          pattern: "^[a-fA-F0-9]{64}$"
+          pattern: "^[a-f0-9]{64}$"
         byte_size:
           type: integer
           minimum: 0
         source_uri:
           type: string
+          format: uri
         published_at:
           type: [string, "null"]
           format: date-time

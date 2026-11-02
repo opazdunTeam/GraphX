@@ -18,7 +18,7 @@ apps/
 ├── api/          Go API
 └── web/          Vue 3 фронтенд
 workers/          Python-пакет адаптеров и воркеров для работы с источниками
-contracts/        OpenAPI, JSON схема сообщений
+contracts/        OpenAPI, JSON Schema и примеры межкомпонентных контрактов
 db/migrations/    ручные SQL-миграции goose
 deploy/           файлы будущего развёртывания
 docs/             общая и техническая документация

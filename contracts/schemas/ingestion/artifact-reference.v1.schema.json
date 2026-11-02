@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/ingestion/artifact-reference.v1.schema.json",
+  "title": "Artifact reference v1",
+  "description": "Reference to immutable source material stored outside the message.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "local_ref",
+    "kind",
+    "object_key",
+    "sha256",
+    "media_type",
+    "byte_size",
+    "source_uri",
+    "retrieved_at",
+    "published_at",
+    "http_metadata"
+  ],
+  "properties": {
+    "local_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["raw_response", "document", "manifest", "screenshot", "other"]
+    },
+    "object_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "media_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "byte_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "retrieved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "published_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "http_metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

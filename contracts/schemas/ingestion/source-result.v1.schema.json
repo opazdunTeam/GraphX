@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://graphx.local/schemas/ingestion/source-result.v1.schema.json",
   "title": "Source result v1",
+  "description": "Successful source collection result, either inline or backed by a manifest.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,6 +16,7 @@
     "normalization_version",
     "digest",
     "artifacts",
+    "manifest",
     "records",
     "claims",
     "warnings"
@@ -29,6 +31,7 @@
       "minimum": 1
     },
     "outcome": {
+      "type": "string",
       "enum": ["succeeded", "not_found"]
     },
     "record_count": {
@@ -53,18 +56,19 @@
     },
     "digest": {
       "type": "string",
-      "pattern": "^[a-fA-F0-9]{64}$"
+      "pattern": "^[a-f0-9]{64}$"
     },
     "artifacts": {
       "type": "array",
+      "minItems": 1,
       "items": {
-        "$ref": "#/$defs/artifact"
+        "$ref": "artifact-reference.v1.schema.json"
       }
     },
     "manifest": {
       "oneOf": [
         {
-          "$ref": "#/$defs/artifact"
+          "$ref": "#/$defs/manifestReference"
         },
         {
           "type": "null"
@@ -74,13 +78,13 @@
     "records": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/record"
+        "$ref": "source-record.v1.schema.json"
       }
     },
     "claims": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/claim"
+        "$ref": "claim.v1.schema.json"
       }
     },
     "warnings": {
@@ -90,145 +94,84 @@
       }
     }
   },
-  "$defs": {
-    "artifact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "object_key",
-        "sha256",
-        "media_type",
-        "byte_size",
-        "source_uri",
-        "retrieved_at",
-        "http_metadata"
-      ],
-      "properties": {
-        "kind": {
-          "enum": ["raw_response", "document", "manifest", "screenshot", "other"]
-        },
-        "object_key": {
-          "type": "string",
-          "minLength": 1
-        },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[a-fA-F0-9]{64}$"
-        },
-        "media_type": {
-          "type": "string",
-          "minLength": 1
-        },
-        "byte_size": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "source_uri": {
-          "type": "string",
-          "minLength": 1
-        },
-        "retrieved_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "published_at": {
-          "type": ["string", "null"],
-          "format": "date-time"
-        },
-        "http_metadata": {
+  "allOf": [
+    {
+      "oneOf": [
+        {
           "type": "object",
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "manifest": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/manifestReference"
+            },
+            "records": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "claims": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "not_found"
+          }
+        },
+        "required": ["outcome"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "record_count": {
+            "const": 0
+          },
+          "manifest": {
+            "type": "null"
+          },
+          "records": {
+            "type": "array",
+            "maxItems": 0
+          },
+          "claims": {
+            "type": "array",
+            "maxItems": 0
           }
         }
       }
-    },
-    "record": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["local_ref", "record_type", "schema_version", "raw_data"],
-      "properties": {
-        "local_ref": {
-          "type": "string",
-          "minLength": 1
-        },
-        "record_type": {
-          "type": "string",
-          "minLength": 1
-        },
-        "external_id": {
-          "type": ["string", "null"]
-        },
-        "schema_version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "raw_data": {
-          "type": "object"
-        }
-      }
-    },
-    "claim": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claim_kind", "subject_local_ref", "predicate", "evidence_locator"],
-      "anyOf": [
+    }
+  ],
+  "$defs": {
+    "manifestReference": {
+      "allOf": [
         {
-          "required": ["object_local_ref"]
+          "$ref": "artifact-reference.v1.schema.json"
         },
         {
-          "required": ["value"]
-        }
-      ],
-      "properties": {
-        "claim_kind": {
-          "enum": ["attribute", "relationship", "event"]
-        },
-        "subject_local_ref": {
-          "type": "string",
-          "minLength": 1
-        },
-        "predicate": {
-          "type": "string",
-          "minLength": 1
-        },
-        "object_local_ref": {
-          "type": ["string", "null"]
-        },
-        "value": true,
-        "raw_value": true,
-        "normalized_value": true,
-        "qualifiers": {
-          "type": "object"
-        },
-        "valid_from": {
-          "type": ["string", "null"]
-        },
-        "valid_to": {
-          "type": ["string", "null"]
-        },
-        "valid_from_precision": {
-          "enum": ["day", "month", "year", "approximate", "unknown"]
-        },
-        "valid_to_precision": {
-          "enum": ["day", "month", "year", "approximate", "unknown"]
-        },
-        "temporal_basis": {
-          "enum": ["explicit", "event_derived", "snapshot", "computed", "unknown"]
-        },
-        "snapshot_at": {
-          "type": ["string", "null"],
-          "format": "date-time"
-        },
-        "evidence_locator": {
           "type": "object",
-          "minProperties": 1
-        },
-        "evidence_excerpt": {
-          "type": ["string", "null"]
+          "properties": {
+            "kind": {
+              "const": "manifest"
+            },
+            "media_type": {
+              "const": "application/json"
+            }
+          }
         }
-      }
+      ]
     }
   }
 }

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/ingestion/source-result-manifest.v1.schema.json",
+  "title": "Source result manifest v1",
+  "description": "Large records and claims stored in MinIO instead of a RabbitMQ message.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "attempt_no",
+    "record_count",
+    "records",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_no": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "record_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "source-record.v1.schema.json"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "claim.v1.schema.json"
+      }
+    }
+  }
+}

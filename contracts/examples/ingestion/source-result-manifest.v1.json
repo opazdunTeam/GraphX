@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "job_id": "22222222-2222-4222-8222-222222222222",
+  "attempt_no": 1,
+  "record_count": 1,
+  "records": [
+    {
+      "local_ref": "organization:1",
+      "artifact_local_ref": "artifact:raw:1",
+      "record_type": "organization",
+      "external_id": "1",
+      "schema_version": "fixture-organization/1",
+      "raw_data": {
+        "name": "Пример"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "claim_kind": "attribute",
+      "subject_local_ref": "organization:1",
+      "predicate": "name",
+      "object_local_ref": null,
+      "raw_value": "Пример",
+      "normalized_value": "пример",
+      "qualifiers": {},
+      "valid_from": null,
+      "valid_to": null,
+      "valid_from_precision": "unknown",
+      "valid_to_precision": "unknown",
+      "temporal_basis": "unknown",
+      "snapshot_at": null,
+      "evidence_locator": {
+        "json_pointer": "/name"
+      },
+      "evidence_excerpt": "Пример"
+    }
+  ]
+}
