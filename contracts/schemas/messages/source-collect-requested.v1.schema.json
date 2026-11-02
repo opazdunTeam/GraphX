@@ -7,8 +7,10 @@
       "$ref": "message-envelope.v1.schema.json"
     },
     {
+      "type": "object",
       "properties": {
         "type": {
+          "type": "string",
           "const": "source.collect.requested.v1"
         },
         "payload": {
@@ -54,14 +56,16 @@
           "minLength": 1
         },
         "purpose": {
-          "enum": ["subject_discovery", "enrichment", "branch_expansion", "reprocessing"]
+          "type": "string",
+          "enum": ["subject_discovery", "enrichment", "branch_expansion"]
         },
         "query": {
-          "type": "object"
+          "$ref": "source-query.v1.schema.json"
         },
         "limits": {
           "type": "object",
           "additionalProperties": false,
+          "required": ["max_records", "max_bytes", "timeout_seconds"],
           "properties": {
             "max_records": {
               "type": "integer",

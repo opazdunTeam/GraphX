@@ -14,7 +14,7 @@
 
 ## Контракт
 
-Логически адаптер реализует операцию вроде `collect(request, context)`. Request содержит запрос, operation, purpose, лимиты и deadline. Context предоставляет общий HTTP client, rate limiter, artifact storage, логирование, trace, cancellation, progress и доступ к секретам.
+Логически адаптер реализует операцию вроде `collect(request, context)`. Request содержит запрос, operation, purpose, лимиты и deadline. Общий запрос передаёт вид субъекта и как минимум исходное имя либо известный идентификатор. Адаптер сам переводит их в параметры конкретного источника и отклоняет неподдерживаемую operation. Context предоставляет общий HTTP client, rate limiter, artifact storage, логирование, trace, cancellation, progress и доступ к секретам.
 
 Адаптер не должен самостоятельно создавать подключения к RabbitMQ, MinIO или отдельную систему логов.
 
@@ -30,31 +30,29 @@ Metadata описывает:
 
 ## Результат
 
-Worker обязан сохранить исходный artifact до построения производных данных. Ссылка на artifact содержит kind, object key, digest, размер, media type, адрес источника, время получения, известное время публикации и безопасные HTTP-метаданные. Версия адаптера передаётся на уровне общего результата и при приёме записывается Go вместе с artifact.
+Worker обязан сохранить исходный artifact до построения производных данных. Ссылка на artifact содержит локальную ссылку, kind, object key, digest, размер, media type, адрес источника, время получения, известное время публикации и безопасные HTTP-метаданные. Версия адаптера передаётся и в успешном результате, и в сообщении об ошибке; при приёме Go записывает её вместе с artifact. Если ошибка возникла после получения материала, например при изменении формата, сохранённые artifacts передаются в `source.collect.failed` и регистрируются без применения производных данных.
 
-Source record хранит `local_ref`, внешний идентификатор, тип, версию исходной схемы и исходные значения. Он должен быть достаточно узким, чтобы его можно было сопоставить с одной сущностью.
+Source record хранит `local_ref`, `artifact_local_ref`, внешний идентификатор, тип, версию исходной схемы и исходные значения. Ссылка на artifact определяет материал и processing run, из которого получена запись. Record должен быть достаточно узким, чтобы его можно было сопоставить с одной сущностью.
 
 Claim атомарен и содержит исходное и нормализованное значения, qualifiers, известные временные границы, их точность и основание, snapshot time, locator и при необходимости короткий excerpt. Версии parser, mapping и normalization передаются один раз на уровне результата; Go записывает их в processing run и созданные claims.
 
-Manifest используется, когда результат слишком велик для RabbitMQ. Inline и manifest являются взаимоисключающими режимами: при manifest records и claims не дублируются в сообщении, а `record_count` относится к содержимому manifest. Ссылка обязана иметь `kind = manifest`. Runtime формирует окончательное сообщение и digest, поэтому adapter возвращает содержательный результат, но не вычисляет transport envelope самостоятельно.
+Manifest используется, когда результат слишком велик для RabbitMQ. Inline и manifest являются взаимоисключающими режимами: при manifest records и claims не дублируются в сообщении, а `record_count` относится к содержимому manifest. Сам файл соответствует `contracts/schemas/ingestion/source-result-manifest.v1.schema.json`, а ссылка обязана иметь `kind = manifest` и `media_type = application/json`. Исходные artifacts всё равно перечисляются в результате, чтобы records из manifest могли ссылаться на них. Runtime формирует manifest, окончательное сообщение и digest, поэтому adapter возвращает содержательный результат, но не вычисляет transport envelope самостоятельно.
 
-Claim не бывает «пустым». Relationship claim содержит непустой `object_local_ref`; attribute содержит хотя бы одно содержательное исходное, нормализованное или типизированное значение; event содержит объект либо значение. Если источник явно сообщает отсутствие признака, mapper создаёт понятный predicate с булевым либо статусным значением, а не передаёт неразличимый `null`.
+Claim не бывает «пустым». Relationship claim содержит непустой `object_local_ref`; attribute содержит хотя бы одно содержательное исходное или нормализованное значение; event содержит объект либо такое значение. Если источник явно сообщает отсутствие признака, mapper создаёт понятный predicate с булевым либо статусным значением, а не передаёт неразличимый `null`.
 
 ## Ошибки
 
-Общие коды должны отличать:
+Общие стабильные коды первой версии:
 
-- `not_found`;
-- `timeout` и `network_error`;
-- `rate_limited`;
-- `unauthorized` или неверную настройку;
-- `captcha` и `action_required`;
-- `format_changed`;
-- `invalid_response`;
-- `unsupported_operation`;
-- внутреннюю ошибку адаптера.
+- `SOURCE_TIMEOUT`, `SOURCE_NETWORK_ERROR`, `SOURCE_UNAVAILABLE`;
+- `SOURCE_RATE_LIMITED`;
+- `SOURCE_ACCESS_DENIED`, включая неверную настройку доступа;
+- `SOURCE_ACTION_REQUIRED`, включая CAPTCHA;
+- `SOURCE_FORMAT_CHANGED`, `SOURCE_INVALID_RESPONSE`;
+- `SOURCE_UNSUPPORTED_OPERATION`;
+- `CONTRACT_VALIDATION_FAILED`, `INTERNAL_ADAPTER_ERROR`.
 
-`not_found` завершает job успешно. `format_changed` нельзя бесконечно повторять: он требует исправления parser.
+`not_found` передаётся как успешный outcome, а не код ошибки. `SOURCE_FORMAT_CHANGED` нельзя бесконечно повторять: он требует исправления parser.
 
 ## Минимальные тесты адаптера
 

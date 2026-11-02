@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/ingestion/source-record.v1.schema.json",
+  "title": "Source record v1",
+  "description": "One source-native record that can later be matched to a canonical entity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "local_ref",
+    "artifact_local_ref",
+    "record_type",
+    "external_id",
+    "schema_version",
+    "raw_data"
+  ],
+  "properties": {
+    "local_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_local_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "record_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "external_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "raw_data": {
+      "type": "object"
+    }
+  }
+}

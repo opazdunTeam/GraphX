@@ -24,6 +24,7 @@
       "minLength": 1
     },
     "schema_version": {
+      "type": "integer",
       "const": 1
     },
     "occurred_at": {
@@ -32,11 +33,11 @@
     },
     "correlation_id": {
       "type": "string",
-      "minLength": 1
+      "format": "uuid"
     },
     "causation_id": {
       "type": ["string", "null"],
-      "minLength": 1
+      "format": "uuid"
     },
     "producer": {
       "type": "string",

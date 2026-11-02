@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphx.local/schemas/ingestion/claim.v1.schema.json",
+  "title": "Claim v1",
+  "description": "Atomic source assertion with provenance and optional temporal bounds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claim_kind",
+    "subject_local_ref",
+    "predicate",
+    "object_local_ref",
+    "raw_value",
+    "normalized_value",
+    "qualifiers",
+    "valid_from",
+    "valid_to",
+    "valid_from_precision",
+    "valid_to_precision",
+    "temporal_basis",
+    "snapshot_at",
+    "evidence_locator",
+    "evidence_excerpt"
+  ],
+  "properties": {
+    "claim_kind": {
+      "type": "string",
+      "enum": ["attribute", "relationship", "event"]
+    },
+    "subject_local_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "predicate": {
+      "type": "string",
+      "minLength": 1
+    },
+    "object_local_ref": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "raw_value": true,
+    "normalized_value": true,
+    "qualifiers": {
+      "type": "object"
+    },
+    "valid_from": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "valid_to": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "valid_from_precision": {
+      "$ref": "#/$defs/datePrecision"
+    },
+    "valid_to_precision": {
+      "$ref": "#/$defs/datePrecision"
+    },
+    "temporal_basis": {
+      "type": "string",
+      "enum": ["explicit", "event_derived", "snapshot", "computed", "unknown"]
+    },
+    "snapshot_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "evidence_locator": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "evidence_excerpt": {
+      "type": ["string", "null"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "claim_kind": {
+            "const": "relationship"
+          }
+        },
+        "required": ["claim_kind"]
+      },
+      "then": {
+        "properties": {
+          "object_local_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "claim_kind": {
+            "const": "attribute"
+          }
+        },
+        "required": ["claim_kind"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "raw_value": {
+                "$ref": "#/$defs/nonEmptyValue"
+              }
+            }
+          },
+          {
+            "properties": {
+              "normalized_value": {
+                "$ref": "#/$defs/nonEmptyValue"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "claim_kind": {
+            "const": "event"
+          }
+        },
+        "required": ["claim_kind"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "object_local_ref": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "properties": {
+              "raw_value": {
+                "$ref": "#/$defs/nonEmptyValue"
+              }
+            }
+          },
+          {
+            "properties": {
+              "normalized_value": {
+                "$ref": "#/$defs/nonEmptyValue"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "valid_from_precision": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "valid_from": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "valid_to_precision": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "valid_to": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "valid_to": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "temporal_basis": {
+            "const": "snapshot"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "valid_from": {
+            "type": "null"
+          },
+          "valid_to": {
+            "type": "null"
+          },
+          "valid_from_precision": {
+            "const": "unknown"
+          },
+          "valid_to_precision": {
+            "const": "unknown"
+          },
+          "snapshot_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "snapshot_at": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "temporal_basis": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "valid_from": {
+            "type": "null"
+          },
+          "valid_to": {
+            "type": "null"
+          },
+          "snapshot_at": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "datePrecision": {
+      "type": "string",
+      "enum": ["day", "month", "year", "approximate", "unknown"]
+    },
+    "nonEmptyValue": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "minProperties": 1
+        },
+        {
+          "type": "array",
+          "minItems": 1
+        }
+      ]
+    }
+  }
+}

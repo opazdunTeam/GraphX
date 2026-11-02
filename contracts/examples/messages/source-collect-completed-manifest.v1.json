@@ -1,0 +1,52 @@
+{
+  "message_id": "77777777-7777-4777-8777-777777777777",
+  "type": "source.collect.completed.v1",
+  "schema_version": 1,
+  "occurred_at": "2026-11-02T12:00:05Z",
+  "correlation_id": "11111111-1111-4111-8111-111111111111",
+  "causation_id": "33333333-3333-4333-8333-333333333333",
+  "producer": "graphx-source-worker",
+  "root_command_id": "33333333-3333-4333-8333-333333333333",
+  "payload": {
+    "job_id": "22222222-2222-4222-8222-222222222222",
+    "attempt_no": 1,
+    "outcome": "succeeded",
+    "record_count": 1,
+    "adapter_version": "fixture-adapter/1.0.0",
+    "parser_version": "fixture-parser/1.0.0",
+    "mapping_version": "fixture-mapper/1.0.0",
+    "normalization_version": "graphx-normalization/1.0.0",
+    "digest": "01a2d532b4b6c31364c5538119e8cc94942a3fde659842f446c450164fb2491f",
+    "artifacts": [
+      {
+        "local_ref": "artifact:raw:1",
+        "kind": "raw_response",
+        "object_key": "fixture/2026/11/02/response.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "media_type": "application/json",
+        "byte_size": 128,
+        "source_uri": "https://example.test/fixture/organization/1",
+        "retrieved_at": "2026-11-02T12:00:03Z",
+        "published_at": null,
+        "http_metadata": {
+          "content-type": "application/json"
+        }
+      }
+    ],
+    "manifest": {
+      "local_ref": "artifact:manifest:1",
+      "kind": "manifest",
+      "object_key": "fixture/2026/11/02/result-manifest.json",
+      "sha256": "6917e8f7cd5d958e7d4141c9cedc6ede595be76f24c10ee4aa3bd6b104639940",
+      "media_type": "application/json",
+      "byte_size": 976,
+      "source_uri": "https://example.test/fixture/organization/1",
+      "retrieved_at": "2026-11-02T12:00:04Z",
+      "published_at": null,
+      "http_metadata": {}
+    },
+    "records": [],
+    "claims": [],
+    "warnings": []
+  }
+}

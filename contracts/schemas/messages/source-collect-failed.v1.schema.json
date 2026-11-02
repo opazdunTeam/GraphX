@@ -7,8 +7,10 @@
       "$ref": "message-envelope.v1.schema.json"
     },
     {
+      "type": "object",
       "properties": {
         "type": {
+          "type": "string",
           "const": "source.collect.failed.v1"
         },
         "payload": {
@@ -21,7 +23,13 @@
     "payload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["job_id", "attempt_no", "error"],
+      "required": [
+        "job_id",
+        "attempt_no",
+        "adapter_version",
+        "artifacts",
+        "error"
+      ],
       "properties": {
         "job_id": {
           "type": "string",
@@ -31,6 +39,16 @@
           "type": "integer",
           "minimum": 1
         },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "../ingestion/artifact-reference.v1.schema.json"
+          }
+        },
         "error": {
           "type": "object",
           "additionalProperties": false,
@@ -38,20 +56,104 @@
           "properties": {
             "code": {
               "type": "string",
-              "minLength": 1
+              "enum": [
+                "SOURCE_TIMEOUT",
+                "SOURCE_NETWORK_ERROR",
+                "SOURCE_RATE_LIMITED",
+                "SOURCE_UNAVAILABLE",
+                "SOURCE_ACCESS_DENIED",
+                "SOURCE_ACTION_REQUIRED",
+                "SOURCE_FORMAT_CHANGED",
+                "SOURCE_INVALID_RESPONSE",
+                "SOURCE_UNSUPPORTED_OPERATION",
+                "CONTRACT_VALIDATION_FAILED",
+                "INTERNAL_ADAPTER_ERROR"
+              ]
             },
             "classification": {
-              "enum": ["transient", "rate_limited", "permanent", "action_required", "bug"]
+              "type": "string",
+              "enum": [
+                "transient",
+                "rate_limited",
+                "permanent",
+                "action_required",
+                "bug"
+              ]
             },
             "message": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 2000
             },
             "retry_after_seconds": {
               "type": ["integer", "null"],
               "minimum": 1
             }
-          }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "SOURCE_TIMEOUT",
+                    "SOURCE_NETWORK_ERROR",
+                    "SOURCE_UNAVAILABLE"
+                  ]
+                },
+                "classification": {
+                  "const": "transient"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "SOURCE_RATE_LIMITED"
+                },
+                "classification": {
+                  "const": "rate_limited"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "SOURCE_ACCESS_DENIED",
+                    "SOURCE_FORMAT_CHANGED",
+                    "SOURCE_INVALID_RESPONSE",
+                    "SOURCE_UNSUPPORTED_OPERATION"
+                  ]
+                },
+                "classification": {
+                  "const": "permanent"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "SOURCE_ACTION_REQUIRED"
+                },
+                "classification": {
+                  "const": "action_required"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "CONTRACT_VALIDATION_FAILED",
+                    "INTERNAL_ADAPTER_ERROR"
+                  ]
+                },
+                "classification": {
+                  "const": "bug"
+                }
+              }
+            }
+          ]
         }
       }
     }

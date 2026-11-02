@@ -1,0 +1,72 @@
+{
+  "message_id": "55555555-5555-4555-8555-555555555555",
+  "type": "source.collect.completed.v1",
+  "schema_version": 1,
+  "occurred_at": "2026-11-02T12:00:05Z",
+  "correlation_id": "11111111-1111-4111-8111-111111111111",
+  "causation_id": "33333333-3333-4333-8333-333333333333",
+  "producer": "graphx-source-worker",
+  "root_command_id": "33333333-3333-4333-8333-333333333333",
+  "payload": {
+    "job_id": "22222222-2222-4222-8222-222222222222",
+    "attempt_no": 1,
+    "outcome": "succeeded",
+    "record_count": 1,
+    "adapter_version": "fixture-adapter/1.0.0",
+    "parser_version": "fixture-parser/1.0.0",
+    "mapping_version": "fixture-mapper/1.0.0",
+    "normalization_version": "graphx-normalization/1.0.0",
+    "digest": "91fabdeae3ef6f1c5f831def17f5f8ec9f3a9c17107106b3de7ca7e10ea02571",
+    "artifacts": [
+      {
+        "local_ref": "artifact:raw:1",
+        "kind": "raw_response",
+        "object_key": "fixture/2026/11/02/response.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "media_type": "application/json",
+        "byte_size": 128,
+        "source_uri": "https://example.test/fixture/person/1",
+        "retrieved_at": "2026-11-02T12:00:03Z",
+        "published_at": null,
+        "http_metadata": {
+          "content-type": "application/json"
+        }
+      }
+    ],
+    "manifest": null,
+    "records": [
+      {
+        "local_ref": "person:1",
+        "artifact_local_ref": "artifact:raw:1",
+        "record_type": "person",
+        "external_id": "1",
+        "schema_version": "fixture-person/1",
+        "raw_data": {
+          "name": "Иван Иванов"
+        }
+      }
+    ],
+    "claims": [
+      {
+        "claim_kind": "attribute",
+        "subject_local_ref": "person:1",
+        "predicate": "name",
+        "object_local_ref": null,
+        "raw_value": "Иван Иванов",
+        "normalized_value": "иван иванов",
+        "qualifiers": {},
+        "valid_from": null,
+        "valid_to": null,
+        "valid_from_precision": "unknown",
+        "valid_to_precision": "unknown",
+        "temporal_basis": "unknown",
+        "snapshot_at": null,
+        "evidence_locator": {
+          "json_pointer": "/name"
+        },
+        "evidence_excerpt": "Иван Иванов"
+      }
+    ],
+    "warnings": []
+  }
+}

@@ -7,8 +7,10 @@
       "$ref": "message-envelope.v1.schema.json"
     },
     {
+      "type": "object",
       "properties": {
         "type": {
+          "type": "string",
           "const": "source.collect.completed.v1"
         },
         "payload": {
