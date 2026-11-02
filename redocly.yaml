@@ -1,0 +1,8 @@
+extends:
+  - recommended
+
+rules:
+  # Health checks and the read-only source catalog have no meaningful client
+  # error in the unauthenticated MVP. Invalid X-Request-ID is replaced rather
+  # than rejected, so artificial 4xx responses would misdescribe the API.
+  operation-4xx-response: off

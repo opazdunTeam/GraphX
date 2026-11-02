@@ -488,11 +488,12 @@ paths:
             X-Request-ID:
               $ref: "#/components/headers/RequestID"
             ETag:
-              description: SHA-256 неизменяемого объекта
+              description: Strong ETag с SHA-256 неизменяемого объекта
               schema:
                 type: string
+                pattern: '^"[a-f0-9]{64}"$'
           content:
-            application/octet-stream:
+            "*/*":
               schema:
                 type: string
                 format: binary
@@ -617,9 +618,18 @@ components:
           additionalProperties:
             type: string
     SubjectInput:
+      oneOf:
+        - $ref: "#/components/schemas/NamedSubjectInput"
+        - $ref: "#/components/schemas/IdentifiedSubjectInput"
+      description: >-
+        Исходный субъект задаётся именем, идентификаторами либо обоими способами.
+        Две явные формы сохраняют это правило в сгенерированных TypeScript-типах:
+        объект с name может дополнительно содержать identifiers, а объект без name
+        обязан содержать identifiers.
+    NamedSubjectInput:
       type: object
       additionalProperties: false
-      required: [type]
+      required: [type, name]
       properties:
         type:
           type: string
@@ -636,9 +646,22 @@ components:
           additionalProperties:
             type: string
             minLength: 1
-      anyOf:
-        - required: [name]
-        - required: [identifiers]
+    IdentifiedSubjectInput:
+      type: object
+      additionalProperties: false
+      required: [type, identifiers]
+      properties:
+        type:
+          type: string
+          enum: [person, organization]
+        identifiers:
+          type: object
+          minProperties: 1
+          propertyNames:
+            minLength: 1
+          additionalProperties:
+            type: string
+            minLength: 1
     InvestigationLimits:
       type: object
       additionalProperties: false
@@ -647,12 +670,12 @@ components:
           type: integer
           minimum: 0
           maximum: 2
-          default: 1
+          description: Если поле отсутствует, API применяет значение 1.
         entity_limit:
           type: integer
           minimum: 1
           maximum: 100
-          default: 50
+          description: Если поле отсутствует, API применяет значение 50.
         sources:
           type: array
           minItems: 1
@@ -1435,6 +1458,11 @@ components:
     TemporalSpan:
       type: object
       additionalProperties: false
+      description: >-
+        Переносимая форма временной семантики. Сгенерированные Go и
+        TypeScript типы отражают поля, но не заменяют runtime/domain validation:
+        приложение проверяет согласованность precision, date anchors, snapshot и
+        допустимый порядок границ.
       required:
         [
           valid_from,
@@ -1862,8 +1890,8 @@ components:
       required:
         - id
         - kind
-        - subject_ref
-        - object_ref
+        - subject_source_record_id
+        - object_source_record_id
         - predicate
         - raw_value
         - normalized_value
@@ -1876,13 +1904,16 @@ components:
         kind:
           type: string
           enum: [attribute, relationship, event]
-        subject_ref:
+        subject_source_record_id:
           type: string
-          minLength: 1
-          description: Локальная ссылка исходной записи на субъект утверждения
-        object_ref:
+          format: uuid
+          description: Сохранённая запись источника, являющаяся субъектом утверждения
+        object_source_record_id:
           type: [string, "null"]
-          description: Локальная ссылка на объект relationship claim
+          format: uuid
+          description: >-
+            Сохранённая запись источника, являющаяся объектом relationship или
+            event claim; null для attribute claim и утверждений без объекта
         predicate:
           type: string
           minLength: 1
