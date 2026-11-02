@@ -6,7 +6,10 @@
 
 ```mermaid
 flowchart LR
-    A[artifact] --> PR[processing_run]
+    SJR[source_job_result] --> SJRA[source_job_result_artifact]
+    SJRA --> A[artifact]
+    SJR --> PR[processing_run]
+    A --> PR
     PR --> SR[source_record]
     SR --> C[claim]
     SR --> ER[entity_record]
@@ -41,13 +44,15 @@ flowchart LR
 
 `artifacts` описывает неизменяемый объект: источник, вид, media type, URI или object key, SHA-256, размер, время публикации и получения, HTTP metadata и версию адаптера. Worker передаёт метаданные объекта, а Go добавляет источник, job и версию адаптера из проверенного результата.
 
-`job_artifacts` связывает задания и материалы с ролью вроде `raw_response`, `document` или `manifest`.
+Связь artifact с job и его попыткой задаётся не в самом `artifacts`, а через запись результата попытки. `source_job_result_artifacts` связывает принятый результат конкретной попытки с материалами и хранит локальную ссылку результата и роль вроде `raw_response`, `document` или `manifest`. Материал принадлежит не заданию вообще, а `source_job_result`, поэтому retry, поздний результат и результат отменённого расследования сохраняют однозначное происхождение. В пределах одного результата `artifact_local_ref` уникален; одна и та же строка `artifacts` может безопасно использоваться повторно, если worker повторно сообщил тот же неизменяемый объект.
 
-`processing_runs` хранит отдельный запуск parser/mapper: область обработки, версии схемы и кода, статус, связь с заменённым запуском. Для одного artifact и одной области может быть только один активный успешный запуск.
+`processing_runs` хранит отдельный запуск parser/mapper: artifact, результат попытки, который создал первоначальный запуск, область обработки, версии схемы и кода, статус и связь с заменённым запуском. `source_job_result_id` обязателен для обычного source collection; будущий повторный разбор сохранённого artifact сможет создать запуск другого происхождения после появления отдельного контракта reprocessing. Для одного artifact и одной области может быть только один активный успешный запуск.
 
 `source_records` - минимальные записи источника, которые можно независимо сопоставить с сущностью. Сохраняются внешний идентификатор, тип, исходный JSON, версия схемы и ссылка на запуск обработки. В ingest-контракте `artifact_local_ref` однозначно определяет исходный материал, для которого Go создаёт этот processing run.
 
-`claims` - атомарные проверяемые утверждения. Claim содержит вид (`attribute`, `relationship`, `event`), predicate, исходное `raw_value`, нормализованное `normalized_value`, qualifiers, временные поля и locator доказательства. Отдельного третьего поля `value` нет: прикладное представление выбирает нормализованное значение, а при его отсутствии - исходное. Claim не может быть пустым: relationship требует непустую ссылку на объект, attribute - содержательное исходное либо нормализованное значение, а event - объект либо такое значение. Явное отсутствие выражается отдельным predicate и значением, например `has_registration_number = false`, а не неразличимым `null`. Версии parser/mapping/normalization Go берёт из результата обработки и записывает в каждый созданный claim.
+`claims` - атомарные проверяемые утверждения. Claim содержит вид (`attribute`, `relationship`, `event`), predicate, исходное `raw_value`, нормализованное `normalized_value`, qualifiers, временные поля и locator доказательства. Отдельного третьего поля `value` нет: прикладное представление выбирает нормализованное значение, а при его отсутствии - исходное. Claim не может быть пустым: relationship требует объект, attribute - содержательное исходное либо нормализованное значение, а event - объект либо такое значение. Явное отсутствие выражается отдельным predicate и значением, например `has_registration_number = false`, а не неразличимым `null`. Версии parser/mapping/normalization Go берёт из результата обработки и записывает в каждый созданный claim.
+
+Локальные `subject_local_ref` и `object_local_ref` существуют только в ingest-контракте. До записи consumer проверяет их уникальность в пределах результата, разрешает через созданные `source_records` и сохраняет в claim UUID `subject_source_record_id` и необязательный `object_source_record_id`. Текстовые local refs не используются как внешние ключи и не остаются единственным способом найти объект relationship claim.
 
 Отдельная таблица evidence на старте не нужна: locator и короткий excerpt можно хранить в claim. Она понадобится, если одно утверждение начнут независимо поддерживать много фрагментов разных artifacts.
 
@@ -81,7 +86,7 @@ flowchart LR
 
 `consumed_messages` защищает consumer по паре `consumer_name + message_id`.
 
-`source_job_results` защищает бизнес-операцию от повторного применения одного результата и хранит digest, `applied` и причину игнорирования.
+`source_job_results` - запись результата одной попытки. Пара `(source_job_id, attempt_no)` уникальна и допускает не больше одного принятого business result независимо от количества RabbitMQ deliveries и `message_id`. Таблица хранит исходный `message_id`, канонический digest payload, `applied` и причину игнорирования. Для completed consumer сверяет переданный worker digest со своим расчётом; для failed, где digest не передаётся транспортом, consumer рассчитывает его сам по каноническому payload. Повтор той же попытки с тем же digest не применяется повторно, а другой digest для уже принятой попытки считается конфликтом контракта и не заменяет сохранённый результат.
 
 `api_idempotency_keys` защищает повторные команды клиента, например подтверждение кандидата.
 
@@ -91,6 +96,11 @@ flowchart LR
 - удаление provenance-цепочки ограничивается, каскадное удаление не используется без явной причины;
 - статусы хранятся как `text` с `CHECK`, чтобы миграции не зависели от PostgreSQL enum;
 - активные связи и материализации защищаются частичными уникальными индексами;
+- результат попытки уникален по `(source_job_id, attempt_no)`, а его `message_id` не повторяется в `source_job_results`;
+- локальная ссылка artifact уникальна внутри `source_job_result`, а связь результата с artifact уникальна по паре идентификаторов;
+- пара `(source_job_result_id, artifact_id)` в `processing_runs` ссылается на `source_job_result_artifacts`; для `processing_scope = 'source_collection'` result обязателен;
+- `applied = true` требует `ignored_reason IS NULL`, а `applied = false` - непустую причину;
+- source record уникален по `(processing_run_id, local_ref)`, но межrecord-ссылки claim после ingest хранятся как UUID, а не как local refs;
 - `pg_trgm` индексируется только по активным нормализованным именам;
 - JSONB используется для исходных и действительно источник-зависимых полей, а не вместо нормальной схемы;
 - точные интервалы проверяются условием `valid_to > valid_from`; для границ с точностью month, year или approximate учитывается неопределённость, а не только дата-якорь.
@@ -99,7 +109,7 @@ flowchart LR
 
 1. Расширения, `investigations`, `sources`.
 2. `source_jobs`, outbox, inbox, business deduplication и API idempotency.
-3. `artifacts`, `job_artifacts`, `processing_runs`, `source_records`, `claims`.
+3. `artifacts`, `source_job_result_artifacts`, `processing_runs`, `source_records`, `claims`.
 4. `entities`, `entity_names`, `entity_identifiers`, `entity_records`.
 5. Reviews, candidates и decisions.
 6. Relationships, supporting claims и состав расследования.
