@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/router"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
-	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/httpserver"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/logging"
 )
 
@@ -24,7 +24,7 @@ func main() {
 	logger := logging.New("graphx-api", cfg.LogLevel)
 	slog.SetDefault(logger)
 
-	server := httpserver.New(cfg, logger)
+	server := router.New(cfg, logger)
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("api started", "address", cfg.HTTPAddr, "environment", cfg.Environment)
