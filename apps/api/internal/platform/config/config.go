@@ -1,79 +1,56 @@
 package config
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
-	"strings"
-	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-const (
-	defaultEnvironment     = "local"
-	defaultLogLevel        = "info"
-	defaultHTTPAddr        = ":8080"
-	defaultShutdownTimeout = 15 * time.Second
-)
-
-type Process struct {
-	Environment string
-	LogLevel    slog.Level
+type Config struct {
+	Server   server
+	Postgres postgres
+	Process  process
 }
 
-type API struct {
-	Process
-	HTTPAddr        string
-	ShutdownTimeout time.Duration
+type server struct {
+	Host                string `yaml:"host"`
+	Log_Level           string `yaml:"log_level"`
+	Read_header_timeout int    `yaml:"read_header_timeout"`
+	Read_timeout        int    `yaml:"read_timeout"`
+	Write_timeout       int    `yaml:"write_timeout"`
+	Idle_timeout        int    `yaml:"idle_timeout"`
+	Retries             int    `yaml:"retries"`
 }
 
-func LoadProcess() (Process, error) {
-	level, err := parseLogLevel(envOrDefault("LOG_LEVEL", defaultLogLevel))
+type postgres struct {
+	Host     string `yaml:"host"`
+	User     string `yaml:"user"`
+	Name     string `yaml:"name"`
+	Password string `yaml:"password"`
+	Port     string `yaml:"port"`
+	Sslmode  string `yaml:"sslmode"`
+}
+
+type process struct {
+	Env      string     `yaml:"env"`
+	LogLevel slog.Level `yaml:"log_level"`
+}
+
+func InitConfig(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+
 	if err != nil {
-		return Process{}, err
+		return Config{}, err
 	}
 
-	environment := strings.TrimSpace(envOrDefault("APP_ENV", defaultEnvironment))
-	if environment == "" {
-		return Process{}, fmt.Errorf("APP_ENV must not be empty")
+	var cfg Config
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
 	}
 
-	return Process{Environment: environment, LogLevel: level}, nil
-}
+	cfg.Postgres.Password = os.Getenv("DB_PASSWORD")
 
-func LoadAPI() (API, error) {
-	process, err := LoadProcess()
-	if err != nil {
-		return API{}, err
-	}
-
-	shutdownTimeout, err := time.ParseDuration(envOrDefault("API_SHUTDOWN_TIMEOUT", defaultShutdownTimeout.String()))
-	if err != nil || shutdownTimeout <= 0 {
-		return API{}, fmt.Errorf("API_SHUTDOWN_TIMEOUT must be a positive duration")
-	}
-
-	httpAddr := strings.TrimSpace(envOrDefault("API_HTTP_ADDR", defaultHTTPAddr))
-	if httpAddr == "" {
-		return API{}, fmt.Errorf("API_HTTP_ADDR must not be empty")
-	}
-
-	return API{
-		Process:         process,
-		HTTPAddr:        httpAddr,
-		ShutdownTimeout: shutdownTimeout,
-	}, nil
-}
-
-func parseLogLevel(raw string) (slog.Level, error) {
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(raw)))); err != nil {
-		return 0, fmt.Errorf("LOG_LEVEL: %w", err)
-	}
-	return level, nil
-}
-
-func envOrDefault(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return fallback
+	return cfg, nil
 }
