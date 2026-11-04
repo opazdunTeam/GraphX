@@ -1,6 +1,7 @@
-.PHONY: fmt test config
-
 CONFIG_DIR := ./internal/platform/config
+DB_URL := $(DATABASE_URL)
+
+.PHONY: fmt test config
 
 fmt:
 	go fmt ./...
@@ -28,3 +29,6 @@ test-db-logs:
 test-integration: test-db-up
 	go test -tags=integration ./internal/... -v
 	$(MAKE) test-db-down
+
+migrate:
+	cd backend && goose -dir ./migrations postgres "$(DB_URL)" up
