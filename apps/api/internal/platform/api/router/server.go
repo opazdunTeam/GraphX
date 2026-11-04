@@ -1,4 +1,4 @@
-package httpserver
+package router
 
 import (
 	"crypto/rand"

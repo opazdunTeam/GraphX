@@ -1,0 +1,18 @@
+server:
+  host: ":8080"
+  read_header_timeout: 5
+  read_timeout: 15
+  write_timeout: 30
+  idle_timeout: 60
+  retries: 3
+
+process:
+  env: local
+  log_level: "info"
+
+postgres:
+  host: "postgres"
+  user: "postgres"
+  name: "graphx_service"
+  port: "5432"
+  sslmode: "disable"
