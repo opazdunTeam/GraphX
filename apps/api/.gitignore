@@ -1,0 +1,8 @@
+*main
+
+config.yaml
+!config.yaml.example
+
+.env
+!.env.example
+

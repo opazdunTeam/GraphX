@@ -1,0 +1,7 @@
+FROM golang:1.27.1
+
+RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+
+WORKDIR /app/
+
+COPY backend/migrations ./migrations
