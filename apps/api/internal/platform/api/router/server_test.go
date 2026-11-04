@@ -25,6 +25,20 @@ func TestHealthEndpoints(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointsStayOutsideBusinessPrefix(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := NewRouter(logger)
+
+	for _, path := range []string{"/api/v1/health/live", "/api/v1/health/ready"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("GET %s returned %d, want %d", path, recorder.Code, http.StatusNotFound)
+		}
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := NewRouter(logger)

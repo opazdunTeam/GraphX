@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.8.2/configuration-schema.json
+package: generated
+
+generate:
+  gin-server: true
+  models: true
+
+output-options:
+  # Health endpoints are operational routes registered manually at the root.
+  # The generated adapter contains only business routes mounted at /api/v1.
+  exclude-tags:
+    - health
+

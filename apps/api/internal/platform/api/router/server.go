@@ -26,15 +26,20 @@ func NewRouter(logger *slog.Logger) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), requestLogger(logger))
+	registerServiceRoutes(router)
 
+	return router
+}
+
+// registerServiceRoutes keeps operational endpoints outside the versioned
+// business API. The generated business adapter is mounted separately at /api/v1.
+func registerServiceRoutes(router gin.IRoutes) {
 	router.GET("/health/live", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.GET("/health/ready", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": gin.H{}})
 	})
-
-	return router
 }
 
 func requestLogger(logger *slog.Logger) gin.HandlerFunc {

@@ -19,10 +19,14 @@ apps/api/
     ├── knowledge/           entities, claims и фактические relationships
     ├── readmodels/          status, evidence, graph и timeline DTO
     └── platform/
+        ├── api/
+        │   ├── generated/   сгенерированные HTTP-типы и Gin-адаптер
+        │   ├── handlers/    реализации бизнес-операций HTTP API
+        │   └── router/      Gin router, middleware и служебные endpoints
         ├── config/          чтение и проверка настроек
-        ├── httpserver/      Gin, маршруты, middleware и health endpoints
         ├── logging/         настройка структурированных логов
-        ├── postgres/        реализации хранилищ через pgx
+        ├── repository/
+        │   └── postgres/    реализации хранилищ через pgx
         ├── rabbitmq/        publisher, consumer и transport concerns
         └── objectstore/     работа с MinIO/S3
 ```
@@ -60,18 +64,20 @@ apps/api/
 
 ## Куда добавлять код
 
-| Задача                                      | Каталог                         |
-| ------------------------------------------- | ------------------------------- |
-| Новый HTTP handler или middleware           | `internal/platform/httpserver`  |
-| SQL-реализация предметного хранилища        | `internal/platform/postgres`    |
-| Публикация или получение RabbitMQ-сообщения | `internal/platform/rabbitmq`    |
-| Работа с объектом MinIO                     | `internal/platform/objectstore` |
-| Переход состояния расследования             | `internal/investigations`       |
-| Retry и состояние source job                | `internal/orchestration`        |
-| Проверка ingest-результата                  | `internal/ingestion`            |
-| Решение о совпадении записей                | `internal/resolution`           |
-| Создание entity или relationship            | `internal/knowledge`            |
-| Сборка status, evidence, graph или timeline | `internal/readmodels`           |
+| Задача                                      | Каталог                                     |
+| ------------------------------------------- | ------------------------------------------- |
+| Новый HTTP handler                          | `internal/platform/api/handlers`            |
+| Gin router, middleware или health endpoint  | `internal/platform/api/router`              |
+| Сгенерированный HTTP transport              | `internal/platform/api/generated`           |
+| SQL-реализация предметного хранилища        | `internal/platform/repository/postgres`     |
+| Публикация или получение RabbitMQ-сообщения | `internal/platform/rabbitmq`                |
+| Работа с объектом MinIO                     | `internal/platform/objectstore`             |
+| Переход состояния расследования             | `internal/investigations`                   |
+| Retry и состояние source job                | `internal/orchestration`                    |
+| Проверка ingest-результата                  | `internal/ingestion`                        |
+| Решение о совпадении записей                | `internal/resolution`                       |
+| Создание entity или relationship            | `internal/knowledge`                        |
+| Сборка status, evidence, graph или timeline | `internal/readmodels`                       |
 
 ## Использование контрактов
 
@@ -81,9 +87,20 @@ apps/api/
 - серверный интерфейс операций;
 - Gin-адаптер, который разбирает параметры и вызывает реализацию интерфейса.
 
-Для этого используется `oapi-codegen`. Конфигурация генератора должна находиться в `apps/api`, а результат - в `internal/platform/httpserver/generated/openapi.gen.go`. Сгенерированный файл не редактируется вручную. Он фиксируется в репозитории, чтобы изменение HTTP-контракта было видно в pull request, а CI повторяет генерацию и проверяет отсутствие diff.
+Для этого используется `oapi-codegen`. Конфигурация находится в `apps/api/oapi-codegen.yaml`, а результат сохраняется в `internal/platform/api/generated/openapi.gen.go`. Сгенерированный файл не редактируется вручную. Он фиксируется в репозитории, чтобы изменение HTTP-контракта было видно в pull request, а CI повторяет генерацию и проверяет отсутствие diff.
 
-Реальные handlers остаются в `internal/platform/httpserver` и реализуют сгенерированный интерфейс. Генератор не создаёт прикладную логику, транзакции, SQL, outbox, переходы состояний или read models. Handler преобразует транспортный вызов в команду предметного модуля и возвращает DTO из OpenAPI.
+Служебные `/health/live` и `/health/ready` регистрируются вручную в `internal/platform/api/router` без version prefix. Конфигурация исключает тег `health` из Go server generation. Сгенерированный adapter содержит только бизнес-операции и подключается с `BaseURL: "/api/v1"`, поэтому не создаёт дубли `/api/v1/health/*`.
+
+Реальные handlers остаются в `internal/platform/api/handlers` и реализуют сгенерированный интерфейс бизнес-операций. Генератор не создаёт прикладную логику, транзакции, SQL, outbox, переходы состояний или read models. Handler преобразует транспортный вызов в команду предметного модуля и возвращает DTO из OpenAPI.
+
+Проверочная команда генерации из `apps/api`:
+
+```powershell
+go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 `
+  --config oapi-codegen.yaml `
+  --o internal/platform/api/generated/openapi.gen.go `
+  ../../contracts/openapi.yaml
+```
 
 JSON Schema из `contracts/schemas/messages` и `contracts/schemas/ingestion` используются только на RabbitMQ-границе:
 
