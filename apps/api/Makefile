@@ -5,6 +5,7 @@ DB_URL := $(DATABASE_URL)
 
 fmt:
 	go fmt ./...
+	go vet ./...
 
 test:
 	go test $(dir) -v
