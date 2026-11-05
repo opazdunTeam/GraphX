@@ -1,7 +1,19 @@
-FROM golang:1.27.1
+# syntax=docker/dockerfile:1
+FROM golang:1.27.3-alpine AS build
 
-RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+ARG GOOSE_VERSION=v3.29.0
+RUN CGO_ENABLED=0 GOBIN=/out go install \
+    -tags="no_azuresql no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb" \
+    github.com/pressly/goose/v3/cmd/goose@${GOOSE_VERSION}
 
-WORKDIR /app/
+FROM alpine:3.24
 
-COPY backend/migrations ./migrations
+RUN apk add --no-cache ca-certificates
+
+COPY --from=build /out/goose /usr/local/bin/goose
+COPY db/migrations /migrations
+
+USER nobody
+WORKDIR /migrations
+
+ENTRYPOINT ["goose", "-dir", "/migrations"]

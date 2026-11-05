@@ -34,22 +34,24 @@ landing/          статический лендинг для демонстр�
 - `workers` - возвращает результаты через RabbitMQ, не подключается к PostgreSQL.
 - `apps/web` - использует только публичный HTTP Go API.
 - `contracts` - фиксирует форматы на границах компонентов.
-- `db/migrations` - единственный источник истины о схеме БД.
+- `db/migrations` - после появления SQL-миграций единственный источник истины о фактической схеме БД.
 - исходные материалы хранятся в S3/MinIO без перезаписи другим содержимым.
 
 ## Начало работы
 
-Требуются Go 1.27, Python 3.15, `uv`, Node.js 24 и pnpm 11. `.env.example` содержит перечень переменных; перенесите необходимые значения в локальный `.env`.
+Требуются Go 1.27, Python 3.15, `uv`, Node.js 24, pnpm 11 и Docker Compose для локальной PostgreSQL 18. `.env.example` содержит общий перечень переменных проекта, но приложения пока не загружают файл `.env` автоматически: значения нужно передать через shell, Compose или среду запуска.
 
-Команды выполняются из корня репозитория. API, workers и web запускаются в отдельных терминалах.
+Команды выполняются из корня репозитория. API и web запускаются в отдельных терминалах; команды workers ниже пока проверяют entrypoints и завершаются.
+
+Текущий Go API реализует инфраструктурный runtime и health endpoints. Бизнес-маршруты первого среза пока возвращают `501`, а `cmd/consumer` работает как lifecycle scaffold без RabbitMQ. Точное состояние Go-модуля описано в [`apps/api/README.md`](apps/api/README.md#текущее-состояние-реализации).
 
 ### Windows (PowerShell): запуск
 
 ```powershell
-cp .env.example .env
-
 # Терминал 1: API
 cd apps/api
+$env:POSTGRES_DSN = "postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable"
+docker compose -f docker-compose.test.yaml up -d --wait
 go run ./cmd/api
 ```
 
@@ -72,10 +74,10 @@ pnpm dev
 ### Linux: запуск
 
 ```bash
-cp .env.example .env
-
 # Терминал 1: API
 cd apps/api
+export POSTGRES_DSN='postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable'
+docker compose -f docker-compose.test.yaml up -d --wait
 go run ./cmd/api
 ```
 
