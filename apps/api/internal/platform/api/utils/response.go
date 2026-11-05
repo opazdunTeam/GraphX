@@ -1,9 +1,8 @@
 package utils
 
 import (
-	"GraphX/internal/platform/dto"
-
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/dto"
 )
 
 func WriteProblem(c *gin.Context, status int, code string, title string, detail string) {

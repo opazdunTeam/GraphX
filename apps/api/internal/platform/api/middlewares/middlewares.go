@@ -1,9 +1,8 @@
 package middlewares
 
 import (
-	"GraphX/internal/platform/api/utils"
-	"GraphX/internal/platform/consts"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -11,6 +10,14 @@ import (
 	"uuid"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
+)
+
+type contextKey uint8
+
+const (
+	requestIDContextKey contextKey = iota
+	requestIDHeader                = "X-Request-ID"
 )
 
 func RecoverMiddleware(logger *slog.Logger) gin.HandlerFunc {
@@ -22,13 +29,13 @@ func RecoverMiddleware(logger *slog.Logger) gin.HandlerFunc {
 				logger.Error(
 					"panic recovered",
 					"request_id", requestID,
-					"panic", recovered,
+					"panic_type", fmt.Sprintf("%T", recovered),
 				)
 
 				utils.WriteProblem(
 					c,
 					http.StatusInternalServerError,
-					"internal_error",
+					"INTERNAL_ERROR",
 					"Internal server error",
 					"An unexpected error occurred.",
 				)
@@ -47,7 +54,7 @@ var requestIDPattern = regexp.MustCompile(
 
 func RequestIDMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestID := c.GetHeader(consts.RequestIDKey)
+		requestID := c.GetHeader(requestIDHeader)
 
 		if !requestIDPattern.MatchString(requestID) {
 			requestID = uuid.New().String()
@@ -55,14 +62,14 @@ func RequestIDMiddleware() gin.HandlerFunc {
 
 		ctx := context.WithValue(
 			c.Request.Context(),
-			consts.RequestIDKey,
+			requestIDContextKey,
 			requestID,
 		)
 
 		c.Request = c.Request.WithContext(ctx)
 
 		// Вернуть ID клиенту в ответе.
-		c.Header(consts.RequestIDKey, requestID)
+		c.Header(requestIDHeader, requestID)
 
 		c.Next()
 	}
@@ -71,11 +78,11 @@ func RequestIDMiddleware() gin.HandlerFunc {
 func LoggerMiddleware(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()
-		traceID := GetRequestID(c.Request.Context())
+		requestID := GetRequestID(c.Request.Context())
 
 		c.Next()
 		logger.InfoContext(c.Request.Context(), "http request",
-			"trace_id", traceID,
+			"request_id", requestID,
 			"method", c.Request.Method,
 			"path", c.FullPath(),
 			"status", c.Writer.Status(),
@@ -85,7 +92,7 @@ func LoggerMiddleware(logger *slog.Logger) gin.HandlerFunc {
 }
 
 func GetRequestID(ctx context.Context) string {
-	requestID, _ := ctx.Value(consts.RequestIDKey).(string)
+	requestID, _ := ctx.Value(requestIDContextKey).(string)
 
 	return requestID
 }

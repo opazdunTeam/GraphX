@@ -1,24 +1,23 @@
 package router
 
 import (
-	"GraphX/internal/platform/api/handlers"
-	"GraphX/internal/platform/api/middlewares"
-	"GraphX/internal/platform/config"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/handlers"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/middlewares"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
 
 func NewServer(cfg config.Config, logger *slog.Logger, h *handlers.Handler) *http.Server {
 	return &http.Server{
-		Addr:              cfg.Server.Host,
+		Addr:              cfg.HTTP.Addr,
 		Handler:           NewRouter(logger, h),
-		ReadHeaderTimeout: time.Duration(cfg.Server.Read_header_timeout) * time.Second,
-		ReadTimeout:       time.Duration(cfg.Server.Read_timeout) * time.Second,
-		WriteTimeout:      time.Duration(cfg.Server.Write_timeout) * time.Second,
-		IdleTimeout:       time.Duration(cfg.Server.Idle_timeout) * time.Second,
+		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTP.ReadTimeout,
+		WriteTimeout:      cfg.HTTP.WriteTimeout,
+		IdleTimeout:       cfg.HTTP.IdleTimeout,
 	}
 }
 
@@ -27,8 +26,8 @@ func NewRouter(logger *slog.Logger, h *handlers.Handler) http.Handler {
 	router := gin.New()
 	router.Use(
 		middlewares.RequestIDMiddleware(),
-		middlewares.RecoverMiddleware(logger),
 		middlewares.LoggerMiddleware(logger),
+		middlewares.RecoverMiddleware(logger),
 	)
 
 	registerServiceRoutes(router, h)
@@ -38,16 +37,16 @@ func NewRouter(logger *slog.Logger, h *handlers.Handler) http.Handler {
 }
 
 func registerServiceRoutes(router gin.IRoutes, h *handlers.Handler) {
-	router.GET("/health/live", h.HealthCheckHadler)
-	router.GET("/health/ready", h.IsReadyHandler)
+	router.GET("/health/live", h.Liveness)
+	router.GET("/health/ready", h.Readiness)
 }
 
 func registerBusinessRoutes(router gin.IRoutes, h *handlers.Handler) {
-	router.POST("/investigations", h.Template)
-	router.GET("/investigations/{id}", h.Template)
-	router.GET("/investigations/{id}/status", h.Template)
-	router.POST("POST /investigations/{id}/cancel", h.Template)
-	router.GET("/claims/{id}/evidence", h.Template)
-	router.GET("/artifacts/{id}/content", h.Template)
-	router.GET("/sources")
+	router.POST("/investigations", h.NotImplemented)
+	router.GET("/investigations/:investigation_id", h.NotImplemented)
+	router.GET("/investigations/:investigation_id/status", h.NotImplemented)
+	router.POST("/investigations/:investigation_id/cancel", h.NotImplemented)
+	router.GET("/claims/:claim_id/evidence", h.NotImplemented)
+	router.GET("/artifacts/:artifact_id/content", h.NotImplemented)
+	router.GET("/sources", h.NotImplemented)
 }

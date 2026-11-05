@@ -1,51 +1,75 @@
 package main
 
-// import (
-// 	"GraphX/internal/platform/api/router"
-// 	"GraphX/internal/platform/config"
-// 	"GraphX/internal/platform/logging"
-// 	"context"
-// 	"errors"
-// 	"log/slog"
-// 	"net/http"
-// 	"os"
-// 	"os/signal"
-// 	"syscall"
-// )
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 
-// func main() {
-// 	cfg, err := config.LoadAPI()
-// 	if err != nil {
-// 		slog.Error("invalid configuration", "error", err)
-// 		os.Exit(1)
-// 	}
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/handlers"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/router"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/logging"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/repository/postgres"
+)
 
-// 	logger := logging.New("graphx-api", cfg.LogLevel)
-// 	slog.SetDefault(logger)
+func main() {
+	if err := run(); err != nil {
+		slog.Error("api stopped", "error", err)
+		os.Exit(1)
+	}
+}
 
-// 	server := router.New(cfg, logger)
-// 	errCh := make(chan error, 1)
-// 	go func() {
-// 		logger.Info("api started", "address", cfg.HTTPAddr, "environment", cfg.Env)
-// 		errCh <- server.ListenAndServe()
-// 	}()
+func run() error {
+	cfg, err := config.LoadAPI()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
 
-// 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-// 	defer stop()
+	logger := logging.New("graphx-api", cfg.LogLevel)
+	slog.SetDefault(logger)
 
-// 	select {
-// 	case <-ctx.Done():
-// 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-// 		defer cancel()
-// 		if err := server.Shutdown(shutdownCtx); err != nil {
-// 			logger.Error("api shutdown failed", "error", err)
-// 			os.Exit(1)
-// 		}
-// 		logger.Info("api stopped")
-// 	case err := <-errCh:
-// 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-// 			logger.Error("api stopped unexpectedly", "error", err)
-// 			os.Exit(1)
-// 		}
-// 	}
-// }
+	processCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	pool, err := postgres.Open(processCtx, cfg.Postgres)
+	if err != nil {
+		return fmt.Errorf("initialize PostgreSQL: %w", err)
+	}
+	defer pool.Close()
+
+	handler := handlers.New(pool, cfg.Postgres.HealthTimeout)
+	server := router.NewServer(cfg, logger, handler)
+
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info(
+			"api started",
+			"address", cfg.HTTP.Addr,
+			"environment", cfg.Environment,
+		)
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case <-processCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown HTTP server: %w", err)
+		}
+		logger.Info("api stopped")
+		return nil
+
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+		return nil
+	}
+}

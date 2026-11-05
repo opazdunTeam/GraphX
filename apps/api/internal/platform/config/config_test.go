@@ -1,167 +1,158 @@
 package config
 
 import (
-	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"testing"
+	"time"
 )
 
-func createConfigFile(t *testing.T, content string) string {
+var apiEnvKeys = []string{
+	"APP_ENV",
+	"LOG_LEVEL",
+	"API_HTTP_ADDR",
+	"API_READ_HEADER_TIMEOUT",
+	"API_READ_TIMEOUT",
+	"API_WRITE_TIMEOUT",
+	"API_IDLE_TIMEOUT",
+	"API_SHUTDOWN_TIMEOUT",
+	"POSTGRES_DSN",
+	"POSTGRES_MAX_CONNS",
+	"POSTGRES_MIN_CONNS",
+	"POSTGRES_CONNECT_TIMEOUT",
+	"POSTGRES_HEALTH_TIMEOUT",
+}
+
+func cleanAPIEnv(t *testing.T) {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	for _, key := range apiEnvKeys {
+		value, exists := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
 
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("failed to write config file: %v", err)
+		t.Cleanup(func() {
+			if exists {
+				_ = os.Setenv(key, value)
+				return
+			}
+			_ = os.Unsetenv(key)
+		})
 	}
-
-	return path
 }
 
-func TestInitConfig_Success(t *testing.T) {
-	t.Setenv("DB_PASSWORD", "env-password")
+func TestLoadAPI_Defaults(t *testing.T) {
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
 
-	yamlContent := `
-server:
-  host: "localhost:8080"
-  log_level: "debug"
-  read_header_timeout: 5
-  read_timeout: 10
-  write_timeout: 15
-  idle_timeout: 30
-  retries: 3
-
-postgres:
-  host: "localhost"
-  user: "postgres"
-  name: "qr_service"
-  password: "yaml-password"
-  port: "5432"
-  sslmode: "disable"
-
-process:
-  env: "local"
-  log_level: DEBUG
-`
-
-	path := createConfigFile(t, yamlContent)
-
-	cfg, err := InitConfig(path)
+	cfg, err := LoadAPI()
 	if err != nil {
-		t.Fatalf("InitConfig() returned error: %v", err)
+		t.Fatalf("LoadAPI() error = %v", err)
 	}
 
-	if cfg.Server.Host != "localhost:8080" {
-		t.Errorf("Server.Host = %q, want %q",
-			cfg.Server.Host, "localhost:8080")
+	if cfg.Environment != "local" {
+		t.Errorf("Environment = %q, want local", cfg.Environment)
 	}
-
-	if cfg.Server.Read_timeout != 10 {
-		t.Errorf("Server.Read_timeout = %d, want %d",
-			cfg.Server.Read_timeout, 10)
+	if cfg.LogLevel != slog.LevelInfo {
+		t.Errorf("LogLevel = %v, want %v", cfg.LogLevel, slog.LevelInfo)
 	}
-
-	if cfg.Server.Retries != 3 {
-		t.Errorf("Server.Retries = %d, want %d",
-			cfg.Server.Retries, 3)
+	if cfg.HTTP.Addr != ":8080" {
+		t.Errorf("HTTP.Addr = %q, want :8080", cfg.HTTP.Addr)
 	}
-
-	if cfg.Postgres.Host != "localhost" {
-		t.Errorf("Postgres.Host = %q, want %q",
-			cfg.Postgres.Host, "localhost")
+	if cfg.HTTP.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("HTTP.ReadHeaderTimeout = %v, want 5s", cfg.HTTP.ReadHeaderTimeout)
 	}
-
-	if cfg.Postgres.Password != "env-password" {
-		t.Errorf("Postgres.Password = %q, want %q",
-			cfg.Postgres.Password, "env-password")
+	if cfg.HTTP.ShutdownTimeout != 15*time.Second {
+		t.Errorf("HTTP.ShutdownTimeout = %v, want 15s", cfg.HTTP.ShutdownTimeout)
 	}
-
-	if cfg.Process.Env != "local" {
-		t.Errorf("Process.Env = %q, want %q",
-			cfg.Process.Env, "local")
+	if cfg.Postgres.MaxConns != 20 || cfg.Postgres.MinConns != 2 {
+		t.Errorf("Postgres pool = %d/%d, want 20/2", cfg.Postgres.MaxConns, cfg.Postgres.MinConns)
 	}
-
-	if cfg.Process.LogLevel != slog.LevelDebug {
-		t.Errorf("Process.LogLevel = %v, want %v",
-			cfg.Process.LogLevel, slog.LevelDebug)
+	if cfg.Postgres.ConnectTimeout != 5*time.Second {
+		t.Errorf("Postgres.ConnectTimeout = %v, want 5s", cfg.Postgres.ConnectTimeout)
+	}
+	if cfg.Postgres.HealthTimeout != 2*time.Second {
+		t.Errorf("Postgres.HealthTimeout = %v, want 2s", cfg.Postgres.HealthTimeout)
 	}
 }
 
-func TestInitConfig_PasswordFromEnv(t *testing.T) {
-	t.Setenv("DB_PASSWORD", "secret-from-env")
+func TestLoadAPI_Overrides(t *testing.T) {
+	cleanAPIEnv(t)
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("API_HTTP_ADDR", "127.0.0.1:9090")
+	t.Setenv("API_READ_TIMEOUT", "3s")
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("POSTGRES_MAX_CONNS", "8")
+	t.Setenv("POSTGRES_MIN_CONNS", "1")
+	t.Setenv("POSTGRES_HEALTH_TIMEOUT", "250ms")
 
-	path := createConfigFile(t, `
-postgres:
-  password: "secret-from-yaml"
-`)
-
-	cfg, err := InitConfig(path)
+	cfg, err := LoadAPI()
 	if err != nil {
-		t.Fatalf("InitConfig() returned error: %v", err)
+		t.Fatalf("LoadAPI() error = %v", err)
 	}
 
-	if cfg.Postgres.Password != "secret-from-env" {
-		t.Errorf("Postgres.Password = %q, want %q",
-			cfg.Postgres.Password, "secret-from-env")
+	if cfg.Environment != "test" || cfg.LogLevel != slog.LevelDebug {
+		t.Errorf("process config = %q/%v, want test/debug", cfg.Environment, cfg.LogLevel)
+	}
+	if cfg.HTTP.Addr != "127.0.0.1:9090" || cfg.HTTP.ReadTimeout != 3*time.Second {
+		t.Errorf("HTTP config = %q/%v", cfg.HTTP.Addr, cfg.HTTP.ReadTimeout)
+	}
+	if cfg.Postgres.MaxConns != 8 || cfg.Postgres.MinConns != 1 {
+		t.Errorf("Postgres pool = %d/%d, want 8/1", cfg.Postgres.MaxConns, cfg.Postgres.MinConns)
+	}
+	if cfg.Postgres.HealthTimeout != 250*time.Millisecond {
+		t.Errorf("Postgres.HealthTimeout = %v, want 250ms", cfg.Postgres.HealthTimeout)
 	}
 }
 
-func TestInitConfig_EmptyEnvPassword(t *testing.T) {
-	t.Setenv("DB_PASSWORD", "")
+func TestLoadProcess_DoesNotRequirePostgres(t *testing.T) {
+	cleanAPIEnv(t)
 
-	path := createConfigFile(t, `
-postgres:
-  password: "secret-from-yaml"
-`)
-
-	cfg, err := InitConfig(path)
+	cfg, err := LoadProcess()
 	if err != nil {
-		t.Fatalf("InitConfig() returned error: %v", err)
+		t.Fatalf("LoadProcess() error = %v", err)
 	}
-
-	if cfg.Postgres.Password != "" {
-		t.Errorf("Postgres.Password = %q, want empty string",
-			cfg.Postgres.Password)
+	if cfg.Environment != "local" {
+		t.Errorf("Environment = %q, want local", cfg.Environment)
 	}
 }
 
-func TestInitConfig_FileNotFound(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing.yaml")
-
-	_, err := InitConfig(path)
-
-	if err == nil {
-		t.Fatal("InitConfig() expected error, got nil")
+func TestLoadAPI_Validation(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "missing DSN", key: "POSTGRES_DSN", value: ""},
+		{name: "invalid log level", key: "LOG_LEVEL", value: "verbose"},
+		{name: "invalid HTTP address", key: "API_HTTP_ADDR", value: "8080"},
+		{name: "non-positive duration", key: "API_READ_TIMEOUT", value: "0s"},
+		{name: "invalid max connections", key: "POSTGRES_MAX_CONNS", value: "many"},
+		{name: "negative min connections", key: "POSTGRES_MIN_CONNS", value: "-1"},
 	}
 
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("InitConfig() error = %v, want os.ErrNotExist", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv(tt.key, tt.value)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatal("LoadAPI() error = nil, want validation error")
+			}
+		})
 	}
 }
 
-func TestInitConfig_InvalidYAML(t *testing.T) {
-	path := createConfigFile(t, `
-server: [
-`)
+func TestLoadAPI_MinConnectionsMustNotExceedMax(t *testing.T) {
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("POSTGRES_MAX_CONNS", "2")
+	t.Setenv("POSTGRES_MIN_CONNS", "3")
 
-	_, err := InitConfig(path)
-
-	if err == nil {
-		t.Fatal("InitConfig() expected YAML parsing error, got nil")
-	}
-}
-
-func TestInitConfig_InvalidFieldType(t *testing.T) {
-	path := createConfigFile(t, `
-server:
-  read_timeout: abc
-`)
-
-	_, err := InitConfig(path)
-
-	if err == nil {
-		t.Fatal("InitConfig() expected type parsing error, got nil")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("LoadAPI() error = nil, want pool bounds validation error")
 	}
 }
