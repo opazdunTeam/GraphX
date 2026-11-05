@@ -2,8 +2,12 @@ GOOSE_VERSION := v3.29.0
 GOOSE_BUILD_TAGS := no_azuresql no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb
 GOOSE := go run -tags="$(GOOSE_BUILD_TAGS)" github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
 MIGRATIONS_DIR := ../../db/migrations
+OAPI_CODEGEN_VERSION := v2.8.2
+OPENAPI_SPEC := ../../contracts/openapi.yaml
+OPENAPI_CONFIG := oapi-codegen.yaml
+OPENAPI_OUTPUT := internal/platform/api/generated/openapi.gen.go
 
-.PHONY: fmt vet build test test-race check test-integration \
+.PHONY: fmt vet build test test-race check generate-api check-api test-integration \
 	test-db-up test-db-down test-db-logs \
 	migrate-up migrate-down migrate-status migrate-reset-local migrate-image
 
@@ -22,14 +26,16 @@ test:
 test-race:
 	go test -race ./...
 
-check: vet build test
+generate-api:
+	go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) --config $(OPENAPI_CONFIG) --o $(OPENAPI_OUTPUT) $(OPENAPI_SPEC)
 
-test-integration: test-db-up
-	@status=0; \
-	POSTGRES_TEST_DSN="postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable" \
-		go test -tags=integration ./internal/platform/repository/postgres -v || status=$$?; \
-	$(MAKE) test-db-down; \
-	exit $$status
+check-api:
+	go run ./internal/tools/openapicheck
+
+check: check-api vet build test
+
+test-integration:
+	go run ./internal/tools/integrationtest
 
 test-db-up:
 	docker compose -f docker-compose.test.yaml up -d --wait

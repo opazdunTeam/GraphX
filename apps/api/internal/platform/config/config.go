@@ -13,6 +13,7 @@ import (
 const (
 	defaultEnvironment            = "local"
 	defaultLogLevel               = "info"
+	defaultLogFormat              = LogFormatJSON
 	defaultHTTPAddr               = ":8080"
 	defaultReadHeaderTimeout      = 5 * time.Second
 	defaultReadTimeout            = 15 * time.Second
@@ -23,22 +24,32 @@ const (
 	defaultPostgresMinConns       = 2
 	defaultPostgresConnectTimeout = 5 * time.Second
 	defaultPostgresHealthTimeout  = 2 * time.Second
+	defaultInvestigationDepth     = 1
+	maxInvestigationDepth         = 2
+	defaultInvestigationEntities  = 50
+	maxInvestigationEntities      = 100
 )
 
-// Config contains all settings required by the API process.
+type LogFormat string
+
+const (
+	LogFormatJSON LogFormat = "json"
+	LogFormatText LogFormat = "text"
+)
+
 type Config struct {
 	Process
-	HTTP     HTTP
-	Postgres Postgres
+	HTTP          HTTP
+	Postgres      Postgres
+	Investigation Investigation
 }
 
-// Process contains settings shared by executable entrypoints.
 type Process struct {
 	Environment string
 	LogLevel    slog.Level
+	LogFormat   LogFormat
 }
 
-// HTTP contains HTTP server lifecycle and timeout settings.
 type HTTP struct {
 	Addr              string
 	ReadHeaderTimeout time.Duration
@@ -48,7 +59,6 @@ type HTTP struct {
 	ShutdownTimeout   time.Duration
 }
 
-// Postgres contains pool settings. DSN must never be written to logs.
 type Postgres struct {
 	DSN            string
 	MaxConns       int32
@@ -57,7 +67,13 @@ type Postgres struct {
 	HealthTimeout  time.Duration
 }
 
-// LoadAPI reads and validates the environment-only API configuration.
+type Investigation struct {
+	DefaultDepth       int
+	MaxDepth           int
+	DefaultEntityLimit int
+	MaxEntityLimit     int
+}
+
 func LoadAPI() (Config, error) {
 	process, err := LoadProcess()
 	if err != nil {
@@ -74,16 +90,25 @@ func LoadAPI() (Config, error) {
 		return Config{}, err
 	}
 
+	investigationConfig, err := loadInvestigation()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		Process:  process,
-		HTTP:     httpConfig,
-		Postgres: postgresConfig,
+		Process:       process,
+		HTTP:          httpConfig,
+		Postgres:      postgresConfig,
+		Investigation: investigationConfig,
 	}, nil
 }
 
-// LoadProcess reads configuration shared by lightweight process entrypoints.
 func LoadProcess() (Process, error) {
 	level, err := parseLogLevel(envOrDefault("LOG_LEVEL", defaultLogLevel))
+	if err != nil {
+		return Process{}, err
+	}
+	format, err := parseLogFormat(envOrDefault("LOG_FORMAT", string(defaultLogFormat)))
 	if err != nil {
 		return Process{}, err
 	}
@@ -96,6 +121,46 @@ func LoadProcess() (Process, error) {
 	return Process{
 		Environment: environment,
 		LogLevel:    level,
+		LogFormat:   format,
+	}, nil
+}
+
+func loadInvestigation() (Investigation, error) {
+	defaultDepth, err := nonNegativeInt("INVESTIGATION_DEFAULT_DEPTH", defaultInvestigationDepth)
+	if err != nil {
+		return Investigation{}, err
+	}
+	maxDepth, err := nonNegativeInt("INVESTIGATION_MAX_DEPTH", maxInvestigationDepth)
+	if err != nil {
+		return Investigation{}, err
+	}
+	if defaultDepth > maxDepth {
+		return Investigation{}, fmt.Errorf("INVESTIGATION_DEFAULT_DEPTH must not exceed INVESTIGATION_MAX_DEPTH")
+	}
+	if maxDepth > maxInvestigationDepth {
+		return Investigation{}, fmt.Errorf("INVESTIGATION_MAX_DEPTH must not exceed the OpenAPI maximum of %d", maxInvestigationDepth)
+	}
+
+	defaultEntityLimit, err := positiveInt("INVESTIGATION_DEFAULT_ENTITY_LIMIT", defaultInvestigationEntities)
+	if err != nil {
+		return Investigation{}, err
+	}
+	maxEntityLimit, err := positiveInt("INVESTIGATION_MAX_ENTITY_LIMIT", maxInvestigationEntities)
+	if err != nil {
+		return Investigation{}, err
+	}
+	if defaultEntityLimit > maxEntityLimit {
+		return Investigation{}, fmt.Errorf("INVESTIGATION_DEFAULT_ENTITY_LIMIT must not exceed INVESTIGATION_MAX_ENTITY_LIMIT")
+	}
+	if maxEntityLimit > maxInvestigationEntities {
+		return Investigation{}, fmt.Errorf("INVESTIGATION_MAX_ENTITY_LIMIT must not exceed the OpenAPI maximum of %d", maxInvestigationEntities)
+	}
+
+	return Investigation{
+		DefaultDepth:       defaultDepth,
+		MaxDepth:           maxDepth,
+		DefaultEntityLimit: defaultEntityLimit,
+		MaxEntityLimit:     maxEntityLimit,
 	}, nil
 }
 
@@ -183,6 +248,14 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	return level, nil
 }
 
+func parseLogFormat(raw string) (LogFormat, error) {
+	format := LogFormat(strings.ToLower(strings.TrimSpace(raw)))
+	if format != LogFormatJSON && format != LogFormatText {
+		return "", fmt.Errorf("LOG_FORMAT must be json or text")
+	}
+	return format, nil
+}
+
 func positiveDuration(key string, fallback time.Duration) (time.Duration, error) {
 	value, err := time.ParseDuration(strings.TrimSpace(envOrDefault(key, fallback.String())))
 	if err != nil || value <= 0 {
@@ -209,6 +282,37 @@ func nonNegativeInt32(key string, fallback int) (int32, error) {
 	}
 	if value < 0 {
 		return 0, fmt.Errorf("%s must not be negative", key)
+	}
+	return value, nil
+}
+
+func positiveInt(key string, fallback int) (int, error) {
+	value, err := parseInt(key, fallback)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return value, nil
+}
+
+func nonNegativeInt(key string, fallback int) (int, error) {
+	value, err := parseInt(key, fallback)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%s must not be negative", key)
+	}
+	return value, nil
+}
+
+func parseInt(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(envOrDefault(key, strconv.Itoa(fallback)))
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return value, nil
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { apiBaseUrl } from '@/shared/api/client'
+import { apiBaseUrl } from '@/shared/api'
 </script>
 
 <template>

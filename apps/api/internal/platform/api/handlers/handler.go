@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
 
 type readinessChecker interface {
@@ -16,12 +17,14 @@ type readinessChecker interface {
 type Handler struct {
 	readiness        readinessChecker
 	readinessTimeout time.Duration
+	investigation    config.Investigation
 }
 
-func New(readiness readinessChecker, readinessTimeout time.Duration) *Handler {
+func New(readiness readinessChecker, readinessTimeout time.Duration, investigation config.Investigation) *Handler {
 	return &Handler{
 		readiness:        readiness,
 		readinessTimeout: readinessTimeout,
+		investigation:    investigation,
 	}
 }
 
@@ -48,16 +51,4 @@ func (h *Handler) Readiness(c *gin.Context) {
 		"status": "ready",
 		"checks": gin.H{"postgres": "ready"},
 	})
-}
-
-// NotImplemented keeps the current HTTP surface explicit without pretending
-// that business handlers from later tasks already exist.
-func (h *Handler) NotImplemented(c *gin.Context) {
-	utils.WriteProblem(
-		c,
-		http.StatusNotImplemented,
-		"NOT_IMPLEMENTED",
-		"Not implemented",
-		"This operation is not implemented yet.",
-	)
 }

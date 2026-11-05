@@ -30,9 +30,9 @@
 
 Нужны Go 1.27, Python 3.15, `uv`, Node.js 24, pnpm 11 и Docker Compose для локальной PostgreSQL 18. Точные версии и допустимые обновления определяются файлами toolchain проекта.
 
-Команды выполняются из корня репозитория, каждый компонент - в отдельном терминале. Корневой `.env.example` служит каталогом настроек, но текущие процессы не читают `.env` автоматически. Значения передаются через shell, Compose или среду запуска.
+Команды выполняются из корня репозитория, каждый компонент - в отдельном терминале. Корневой `.env.example` служит каталогом настроек. Значения передаются через shell, Compose или среду запуска; автоматическая загрузка `.env` не является частью runtime.
 
-Для текущего API обязательна доступная PostgreSQL и `POSTGRES_DSN`. Команды ниже используют изолированную тестовую PostgreSQL на `localhost:5433`; она достаточна для запуска health endpoints и ещё не реализованных бизнес-маршрутов. После остановки API окружение удаляется командой `docker compose -f docker-compose.test.yaml down -v` из `apps/api`.
+Для запуска API обязательны доступная PostgreSQL и `POSTGRES_DSN`. Команды ниже используют изолированную тестовую PostgreSQL на `localhost:5433`. После остановки API окружение удаляется командой `docker compose -f docker-compose.test.yaml down -v` из `apps/api`.
 
 ### Windows (PowerShell): запуск
 
@@ -84,8 +84,7 @@ pnpm dev
 
 ```powershell
 cd apps/api
-go test ./...
-go vet ./...
+make check
 
 cd ../../workers
 uv run ruff check .
@@ -101,8 +100,7 @@ pnpm build
 
 ```bash
 cd apps/api
-go test ./...
-go vet ./...
+make check
 
 cd ../../workers
 uv run ruff check .

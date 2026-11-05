@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/handlers"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
 
 type readinessStub struct {
@@ -27,7 +28,9 @@ func (s *readinessStub) Ping(context.Context) error {
 
 func testRouter(checker *readinessStub) http.Handler {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	handler := handlers.New(checker, 50*time.Millisecond)
+	handler := handlers.New(checker, 50*time.Millisecond, config.Investigation{
+		DefaultDepth: 1, MaxDepth: 2, DefaultEntityLimit: 50, MaxEntityLimit: 100,
+	})
 	return NewRouter(logger, handler)
 }
 
@@ -103,29 +106,89 @@ func TestReadinessUnavailable(t *testing.T) {
 
 func TestRoutes(t *testing.T) {
 	router := testRouter(&readinessStub{})
+	const id = "00000000-0000-4000-8000-000000000001"
 	tests := []struct {
 		method string
 		path   string
+		body   string
 	}{
-		{method: http.MethodPost, path: "/api/v1/investigations"},
-		{method: http.MethodGet, path: "/api/v1/investigations/inv-1"},
-		{method: http.MethodGet, path: "/api/v1/investigations/inv-1/status"},
-		{method: http.MethodPost, path: "/api/v1/investigations/inv-1/cancel"},
-		{method: http.MethodGet, path: "/api/v1/claims/claim-1/evidence"},
-		{method: http.MethodGet, path: "/api/v1/artifacts/artifact-1/content"},
+		{
+			method: http.MethodPost,
+			path:   "/api/v1/investigations",
+			body:   `{"subject":{"type":"person","name":"Ada"}}`,
+		},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/status"},
+		{method: http.MethodPost, path: "/api/v1/investigations/" + id + "/cancel"},
 		{method: http.MethodGet, path: "/api/v1/sources"},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/reviews"},
+		{method: http.MethodGet, path: "/api/v1/reviews/" + id},
+		{method: http.MethodPost, path: "/api/v1/reviews/" + id + "/decision"},
+		{method: http.MethodPost, path: "/api/v1/reviews/" + id + "/decision/revert"},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/entities"},
+		{method: http.MethodGet, path: "/api/v1/entities/" + id},
+		{method: http.MethodPost, path: "/api/v1/entities/" + id + "/expand"},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/graph"},
+		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/timeline"},
+		{method: http.MethodGet, path: "/api/v1/relationships/" + id},
+		{method: http.MethodGet, path: "/api/v1/claims/" + id + "/evidence"},
+		{method: http.MethodGet, path: "/api/v1/artifacts/" + id + "/content"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("Idempotency-Key", id)
+			if tt.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
 			router.ServeHTTP(response, request)
 
 			if response.Code != http.StatusNotImplemented {
 				t.Fatalf("status = %d, want %d", response.Code, http.StatusNotImplemented)
 			}
 		})
+	}
+}
+
+func TestCreateInvestigationRejectsInvalidLimits(t *testing.T) {
+	router := testRouter(&readinessStub{})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/investigations",
+		strings.NewReader(`{"subject":{"type":"person","name":"Ada"},"limits":{"sources":[]}}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000001")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(response.Body.String(), `"code":"INVALID_REQUEST"`) {
+		t.Errorf("body = %s, want invalid request problem", response.Body.String())
+	}
+}
+
+func TestGeneratedRouteRejectsInvalidUUID(t *testing.T) {
+	router := testRouter(&readinessStub{})
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(
+		response,
+		httptest.NewRequest(http.MethodGet, "/api/v1/investigations/not-a-uuid", nil),
+	)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/problem+json") {
+		t.Errorf("Content-Type = %q, want application/problem+json", contentType)
+	}
+	if !strings.Contains(response.Body.String(), `"code":"INVALID_REQUEST"`) {
+		t.Errorf("body = %s, want generated adapter problem code", response.Body.String())
 	}
 }
 

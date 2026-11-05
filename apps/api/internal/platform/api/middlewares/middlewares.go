@@ -67,8 +67,8 @@ func RequestIDMiddleware() gin.HandlerFunc {
 		)
 
 		c.Request = c.Request.WithContext(ctx)
+		c.Request.Header.Set(requestIDHeader, requestID)
 
-		// Вернуть ID клиенту в ответе.
 		c.Header(requestIDHeader, requestID)
 
 		c.Next()

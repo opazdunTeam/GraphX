@@ -20,7 +20,11 @@ apps/api/
     ├── readmodels/          status, evidence, graph и timeline DTO
     └── platform/
         ├── config/          чтение и проверка настроек
-        ├── api/             Gin, маршруты, middleware и health endpoints
+        ├── api/
+        │   ├── generated/   generated HTTP models, server interface и Gin adapter
+        │   ├── handlers/    health и ручные реализации бизнес-операций
+        │   ├── middlewares/ HTTP middleware
+        │   └── router/      HTTP server и регистрация маршрутов
         ├── logging/         настройка структурированных логов
         ├── repository/
         │   └── postgres/    pgx pool и реализации хранилищ
@@ -61,30 +65,46 @@ apps/api/
 
 ## Куда добавлять код
 
-| Задача                                      | Каталог                         |
-| ------------------------------------------- | ------------------------------- |
-| Новый HTTP handler или middleware           | `internal/platform/api`         |
+| Задача                                      | Каталог                                 |
+| ------------------------------------------- | --------------------------------------- |
+| Новый HTTP handler                          | `internal/platform/api/handlers`        |
+| Gin router или health endpoint              | `internal/platform/api/router`          |
+| HTTP middleware                             | `internal/platform/api/middlewares`     |
+| Сгенерированный HTTP transport              | `internal/platform/api/generated`       |
 | SQL-реализация предметного хранилища        | `internal/platform/repository/postgres` |
-| Публикация или получение RabbitMQ-сообщения | `internal/platform/rabbitmq`    |
-| Работа с объектом MinIO                     | `internal/platform/objectstore` |
-| Переход состояния расследования             | `internal/investigations`       |
-| Retry и состояние source job                | `internal/orchestration`        |
-| Проверка ingest-результата                  | `internal/ingestion`            |
-| Решение о совпадении записей                | `internal/resolution`           |
-| Создание entity или relationship            | `internal/knowledge`            |
-| Сборка status, evidence, graph или timeline | `internal/readmodels`           |
+| Публикация или получение RabbitMQ-сообщения | `internal/platform/rabbitmq`            |
+| Работа с объектом MinIO                     | `internal/platform/objectstore`         |
+| Переход состояния расследования             | `internal/investigations`               |
+| Retry и состояние source job                | `internal/orchestration`                |
+| Проверка ingest-результата                  | `internal/ingestion`                    |
+| Решение о совпадении записей                | `internal/resolution`                   |
+| Создание entity или relationship            | `internal/knowledge`                    |
+| Сборка status, evidence, graph или timeline | `internal/readmodels`                   |
 
 ## Использование контрактов
 
-Источником HTTP-контракта служит [`contracts/openapi.yaml`](../../contracts/openapi.yaml). При реализации первого endpoint из него нужно генерировать:
+Источником HTTP-контракта служит [`contracts/openapi.yaml`](../../contracts/openapi.yaml). Из него генерируются:
 
 - Go-типы HTTP-запросов и ответов;
 - серверный интерфейс операций;
 - Gin-адаптер, который разбирает параметры и вызывает реализацию интерфейса.
 
-Для этого используется `oapi-codegen`. Конфигурация генератора должна находиться в `apps/api`, а результат - внутри HTTP-адаптера. Точный путь фиксируется задачей подключения генерации. Сгенерированный файл не редактируется вручную. Он фиксируется в репозитории, чтобы изменение HTTP-контракта было видно в pull request, а CI повторяет генерацию и проверяет отсутствие diff.
+Для этого используется `oapi-codegen` 2.8.2. Конфигурация находится в `apps/api/oapi-codegen.yaml`, а результат — в `internal/platform/api/generated/openapi.gen.go`. Сгенерированный файл не редактируется вручную и фиксируется в репозитории.
 
-Реальные handlers остаются в `internal/platform/api` и реализуют сгенерированный интерфейс. Генератор не создаёт прикладную логику, транзакции, SQL, outbox, переходы состояний или read models. Handler преобразует транспортный вызов в команду предметного модуля и возвращает DTO из OpenAPI.
+Health endpoints исключены из server generation и остаются ручными маршрутами корневого router. Generated adapter содержит бизнес-операции и регистрируется с `BaseURL: "/api/v1"`, поэтому служебный и бизнес-контуры не смешиваются.
+
+Ручной `handlers.Handler` реализует generated `ServerInterface`. Генератор не создаёт прикладную логику, транзакции, SQL, outbox, переходы состояний или read models. Реальный handler преобразует transport-вызов в команду предметного модуля и возвращает DTO из OpenAPI.
+
+Необязательные limits нормализуются методом `Handler.ResolveInvestigationLimits`. Defaults и deployment-максимумы берутся из `INVESTIGATION_DEFAULT_*` и `INVESTIGATION_MAX_*`; конфигурация не может расширить публичные границы OpenAPI. Defaults намеренно не записаны в OpenAPI, чтобы generated-клиенты продолжали считать поля optional.
+
+Команды из `apps/api`:
+
+```bash
+make generate-api
+make check-api
+```
+
+`check-api` повторяет генерацию во временный файл, сравнивает committed output и проверяет сохранение union `SubjectInput`, optional limits, business routes и исключение health. Unit tests дополнительно защищают совпадение конфигурационных максимумов с OpenAPI. Общая `make check` включает обе проверки.
 
 JSON Schema из `contracts/schemas/messages` и `contracts/schemas/ingestion` используются только на RabbitMQ-границе:
 
@@ -94,11 +114,11 @@ JSON Schema из `contracts/schemas/messages` и `contracts/schemas/ingestion` �
 
 Go-структуры RabbitMQ и ingest не генерируются из JSON Schema в MVP. Сложные условия схем удобнее выразить в transport-моделях и доменном коде явно, а соответствие контролировать тестами на общих примерах из `contracts/examples`.
 
-Генерация OpenAPI и runtime-проверка JSON Schema пока не подключены. Их следует добавить вместе с первым HTTP handler и RabbitMQ consumer соответственно, а не заранее создавать неиспользуемую инфраструктуру.
+OpenAPI определяет HTTP transport и используется для генерации. JSON Schema проверяется отдельно на RabbitMQ-границе; generated HTTP-типы не заменяют runtime-проверку сообщений и предметных инвариантов.
 
 ## Запуск и проверка
 
-API использует только переменные окружения. Общий каталог переменных проекта и безопасные примеры находятся в корневом [`.env.example`](../../.env.example), но текущий Go API читает только `APP_ENV`, `LOG_LEVEL`, `API_HTTP_ADDR`, `API_*_TIMEOUT`, `POSTGRES_DSN`, `POSTGRES_MAX_CONNS`, `POSTGRES_MIN_CONNS`, `POSTGRES_CONNECT_TIMEOUT` и `POSTGRES_HEALTH_TIMEOUT`. JSON-формат логов пока фиксирован реализацией; `LOG_FORMAT` и остальные будущие настройки из общего файла Go-модуль ещё не использует.
+API использует только переменные окружения. Общий каталог переменных проекта и безопасные примеры находятся в корневом [`.env.example`](../../.env.example). Процесс API читает `APP_ENV`, `LOG_LEVEL`, `LOG_FORMAT`, `API_HTTP_ADDR`, `API_*_TIMEOUT`, `POSTGRES_*` и `INVESTIGATION_DEFAULT_*`/`INVESTIGATION_MAX_*`. `LOG_FORMAT` принимает `json` или `text`.
 
 Файл `.env` сам по себе приложением не читается: значения передаются процессу через shell, Compose или среду запуска. `POSTGRES_DSN` обязателен; остальные используемые параметры API и пула имеют проверяемые значения по умолчанию. Для локального smoke-запуска можно использовать тестовую PostgreSQL из `docker-compose.test.yaml`.
 
@@ -155,7 +175,7 @@ go vet ./...
 
 После ручного smoke-запуска тестовая база останавливается и удаляется из `apps/api` командой `docker compose -f docker-compose.test.yaml down -v`.
 
-API предоставляет `/health/live` и `/health/ready` без префикса `/api/v1`. Liveness проверяет только работающий HTTP-процесс. Readiness с коротким timeout проверяет PostgreSQL и возвращает `503 application/problem+json`, если обязательная зависимость недоступна. Бизнес-маршруты находятся под `/api/v1`; до реализации соответствующих use cases их временные handlers честно отвечают `501`.
+API предоставляет `/health/live` и `/health/ready` без префикса `/api/v1`. Liveness проверяет только работающий HTTP-процесс. Readiness с коротким timeout проверяет PostgreSQL и возвращает `503 application/problem+json`, если обязательная зависимость недоступна. Бизнес-маршруты находятся под `/api/v1`; generated route фиксирует transport-границу, но не считается реализацией use case.
 
 ## PostgreSQL и миграции
 

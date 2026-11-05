@@ -10,6 +10,7 @@ import (
 var apiEnvKeys = []string{
 	"APP_ENV",
 	"LOG_LEVEL",
+	"LOG_FORMAT",
 	"API_HTTP_ADDR",
 	"API_READ_HEADER_TIMEOUT",
 	"API_READ_TIMEOUT",
@@ -21,6 +22,10 @@ var apiEnvKeys = []string{
 	"POSTGRES_MIN_CONNS",
 	"POSTGRES_CONNECT_TIMEOUT",
 	"POSTGRES_HEALTH_TIMEOUT",
+	"INVESTIGATION_DEFAULT_DEPTH",
+	"INVESTIGATION_MAX_DEPTH",
+	"INVESTIGATION_DEFAULT_ENTITY_LIMIT",
+	"INVESTIGATION_MAX_ENTITY_LIMIT",
 }
 
 func cleanAPIEnv(t *testing.T) {
@@ -57,6 +62,9 @@ func TestLoadAPI_Defaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %v, want %v", cfg.LogLevel, slog.LevelInfo)
 	}
+	if cfg.LogFormat != LogFormatJSON {
+		t.Errorf("LogFormat = %q, want json", cfg.LogFormat)
+	}
 	if cfg.HTTP.Addr != ":8080" {
 		t.Errorf("HTTP.Addr = %q, want :8080", cfg.HTTP.Addr)
 	}
@@ -75,26 +83,35 @@ func TestLoadAPI_Defaults(t *testing.T) {
 	if cfg.Postgres.HealthTimeout != 2*time.Second {
 		t.Errorf("Postgres.HealthTimeout = %v, want 2s", cfg.Postgres.HealthTimeout)
 	}
+	if cfg.Investigation.DefaultDepth != 1 || cfg.Investigation.MaxDepth != 2 ||
+		cfg.Investigation.DefaultEntityLimit != 50 || cfg.Investigation.MaxEntityLimit != 100 {
+		t.Errorf("Investigation = %#v, want documented defaults", cfg.Investigation)
+	}
 }
 
 func TestLoadAPI_Overrides(t *testing.T) {
 	cleanAPIEnv(t)
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FORMAT", "text")
 	t.Setenv("API_HTTP_ADDR", "127.0.0.1:9090")
 	t.Setenv("API_READ_TIMEOUT", "3s")
 	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
 	t.Setenv("POSTGRES_MAX_CONNS", "8")
 	t.Setenv("POSTGRES_MIN_CONNS", "1")
 	t.Setenv("POSTGRES_HEALTH_TIMEOUT", "250ms")
+	t.Setenv("INVESTIGATION_DEFAULT_DEPTH", "0")
+	t.Setenv("INVESTIGATION_MAX_DEPTH", "1")
+	t.Setenv("INVESTIGATION_DEFAULT_ENTITY_LIMIT", "25")
+	t.Setenv("INVESTIGATION_MAX_ENTITY_LIMIT", "75")
 
 	cfg, err := LoadAPI()
 	if err != nil {
 		t.Fatalf("LoadAPI() error = %v", err)
 	}
 
-	if cfg.Environment != "test" || cfg.LogLevel != slog.LevelDebug {
-		t.Errorf("process config = %q/%v, want test/debug", cfg.Environment, cfg.LogLevel)
+	if cfg.Environment != "test" || cfg.LogLevel != slog.LevelDebug || cfg.LogFormat != LogFormatText {
+		t.Errorf("process config = %q/%v/%q, want test/debug/text", cfg.Environment, cfg.LogLevel, cfg.LogFormat)
 	}
 	if cfg.HTTP.Addr != "127.0.0.1:9090" || cfg.HTTP.ReadTimeout != 3*time.Second {
 		t.Errorf("HTTP config = %q/%v", cfg.HTTP.Addr, cfg.HTTP.ReadTimeout)
@@ -104,6 +121,10 @@ func TestLoadAPI_Overrides(t *testing.T) {
 	}
 	if cfg.Postgres.HealthTimeout != 250*time.Millisecond {
 		t.Errorf("Postgres.HealthTimeout = %v, want 250ms", cfg.Postgres.HealthTimeout)
+	}
+	if cfg.Investigation.DefaultDepth != 0 || cfg.Investigation.MaxDepth != 1 ||
+		cfg.Investigation.DefaultEntityLimit != 25 || cfg.Investigation.MaxEntityLimit != 75 {
+		t.Errorf("Investigation = %#v, want environment overrides", cfg.Investigation)
 	}
 }
 
@@ -127,10 +148,13 @@ func TestLoadAPI_Validation(t *testing.T) {
 	}{
 		{name: "missing DSN", key: "POSTGRES_DSN", value: ""},
 		{name: "invalid log level", key: "LOG_LEVEL", value: "verbose"},
+		{name: "invalid log format", key: "LOG_FORMAT", value: "pretty"},
 		{name: "invalid HTTP address", key: "API_HTTP_ADDR", value: "8080"},
 		{name: "non-positive duration", key: "API_READ_TIMEOUT", value: "0s"},
 		{name: "invalid max connections", key: "POSTGRES_MAX_CONNS", value: "many"},
 		{name: "negative min connections", key: "POSTGRES_MIN_CONNS", value: "-1"},
+		{name: "depth over contract maximum", key: "INVESTIGATION_MAX_DEPTH", value: "3"},
+		{name: "entity limit over contract maximum", key: "INVESTIGATION_MAX_ENTITY_LIMIT", value: "101"},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +165,28 @@ func TestLoadAPI_Validation(t *testing.T) {
 
 			if _, err := LoadAPI(); err == nil {
 				t.Fatal("LoadAPI() error = nil, want validation error")
+			}
+		})
+	}
+}
+
+func TestLoadAPI_InvestigationDefaultsMustNotExceedMaximums(t *testing.T) {
+	tests := []struct {
+		defaultKey string
+		maxKey     string
+	}{
+		{defaultKey: "INVESTIGATION_DEFAULT_DEPTH", maxKey: "INVESTIGATION_MAX_DEPTH"},
+		{defaultKey: "INVESTIGATION_DEFAULT_ENTITY_LIMIT", maxKey: "INVESTIGATION_MAX_ENTITY_LIMIT"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.defaultKey, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv(tt.defaultKey, "2")
+			t.Setenv(tt.maxKey, "1")
+			if _, err := LoadAPI(); err == nil {
+				t.Fatal("LoadAPI() error = nil, want limits validation error")
 			}
 		})
 	}

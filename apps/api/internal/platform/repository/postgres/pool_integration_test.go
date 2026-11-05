@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -55,20 +56,55 @@ func TestStoreWithinTransaction(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	store := NewStore(pool)
-	var value int
+	const table = "graphx_transaction_probe"
+	if _, err := pool.Exec(ctx, "drop table if exists "+table); err != nil {
+		t.Fatalf("drop transaction probe: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "create table "+table+" (value integer not null)"); err != nil {
+		t.Fatalf("create transaction probe: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(cleanupCtx, "drop table if exists "+table)
+	})
+
 	if err := store.WithinTransaction(ctx, func(txStore *Store) error {
-		return txStore.db.QueryRow(ctx, "select 1").Scan(&value)
+		_, err := txStore.db.Exec(ctx, "insert into "+table+" (value) values (1)")
+		return err
 	}); err != nil {
 		t.Fatalf("WithinTransaction() error = %v", err)
 	}
-	if value != 1 {
-		t.Errorf("transaction query value = %d, want 1", value)
+
+	var committed int
+	if err := pool.QueryRow(ctx, "select count(*) from "+table+" where value = 1").Scan(&committed); err != nil {
+		t.Fatalf("read committed value: %v", err)
+	}
+	if committed != 1 {
+		t.Errorf("committed rows = %d, want 1", committed)
 	}
 
 	wantErr := errors.New("rollback transaction")
-	err = store.WithinTransaction(ctx, func(*Store) error { return wantErr })
+	err = store.WithinTransaction(ctx, func(txStore *Store) error {
+		if _, insertErr := txStore.db.Exec(ctx, "insert into "+table+" (value) values (2)"); insertErr != nil {
+			return insertErr
+		}
+		return wantErr
+	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("WithinTransaction() error = %v, want %v", err, wantErr)
+	}
+
+	var rolledBack int
+	if err := pool.QueryRow(ctx, "select count(*) from "+table+" where value = 2").Scan(&rolledBack); err != nil {
+		t.Fatalf("read rolled back value: %v", err)
+	}
+	if rolledBack != 0 {
+		t.Errorf("rolled back rows = %d, want 0", rolledBack)
+	}
+
+	if err := store.WithinTransaction(ctx, nil); err == nil {
+		t.Fatal("WithinTransaction(nil) error = nil, want error")
 	}
 }
 

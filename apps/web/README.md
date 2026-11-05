@@ -14,19 +14,21 @@ Transport DTO преобразуются в `shared/api`/entity models, а не 
 
 ## Использование OpenAPI
 
-Единственным источником типов публичного API служит [`contracts/openapi.yaml`](../../contracts/openapi.yaml). При реализации первого пользовательского сценария `openapi-typescript` должен генерировать типы в:
+Единственным источником типов публичного API служит [`contracts/openapi.yaml`](../../contracts/openapi.yaml). `openapi-typescript` 7.13.0 генерирует типы в:
 
 ```text
 src/shared/api/generated/openapi.ts
 ```
 
-Этот файл не редактируется вручную и фиксируется в репозитории. В `package.json` добавляется отдельная команда `generate:api`, а CI повторяет генерацию и проверяет отсутствие diff. Так изменение обязательного поля или ответа API становится обычной ошибкой TypeScript, а не обнаруживается во время демонстрации.
+Этот файл не редактируется вручную и фиксируется в репозитории. `pnpm generate:api` повторяет генерацию, а `pnpm check:api` сравнивает output с временно сгенерированным файлом и проверяет, что `SubjectInput`, optional limits и dynamic artifact media type не ослаблены. Так изменение обязательного поля или ответа API становится обычной ошибкой TypeScript, а не обнаруживается во время демонстрации.
 
-Ручной код остаётся в `src/shared/api`: он задаёт base URL, `X-Request-ID`, `Idempotency-Key`, обработку `application/problem+json` и удобные функции вызова. Для первого среза достаточно сгенерированных типов и небольшого клиента; отдельный тяжёлый SDK не нужен. Если число операций вырастет, можно подключить типизированный клиент поверх тех же OpenAPI-типов.
+Ручной код остаётся в `src/shared/api`: здесь задаётся base URL, а функции вызова добавляются вместе с соответствующими пользовательскими сценариями. Они должны передавать `X-Request-ID` и `Idempotency-Key` согласно операции и преобразовывать `application/problem+json` в единый тип ошибки. Отдельный тяжёлый SDK для первого среза не нужен.
 
 Page components не импортируют сгенерированные типы напрямую. Они обращаются к функциям `shared/api`, а transport DTO при необходимости преобразуются в модели интерфейса. JSON Schema сообщений и ingest frontend не использует: RabbitMQ и внутренние данные workers не являются его границей.
 
-Генерация пока не подключена, потому что базовые endpoints ещё не реализованы. Она добавляется одновременно с первым реальным вызовом API.
+`src/shared/api/index.ts` служит публичной границей и реэкспортирует только необходимые transport types и настройку base URL. TypeScript закреплён на 5.9.3 до появления официальной peer-поддержки TypeScript 6 в `openapi-typescript`.
+
+Base URL задаётся build/dev-server переменной `VITE_API_BASE_URL`; при её отсутствии используется `/api/v1`. Переменная объявлена в корневом `.env.example` и типизирована в `src/env.d.ts`.
 
 ## Запуск и проверка
 
@@ -43,6 +45,8 @@ pnpm dev
 ```powershell
 # Проверки
 cd apps/web
+pnpm generate:api
+pnpm check:api
 pnpm check
 pnpm build
 ```
@@ -58,6 +62,8 @@ pnpm dev
 ```bash
 # Проверки
 cd apps/web
+pnpm generate:api
+pnpm check:api
 pnpm check
 pnpm build
 ```

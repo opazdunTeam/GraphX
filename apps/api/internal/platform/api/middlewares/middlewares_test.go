@@ -55,7 +55,13 @@ func TestInvalidRequestIDIsReplaced(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(RequestIDMiddleware())
-	router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	var handlerHeader string
+	var handlerContextID string
+	router.GET("/", func(c *gin.Context) {
+		handlerHeader = c.GetHeader("X-Request-ID")
+		handlerContextID = GetRequestID(c.Request.Context())
+		c.Status(http.StatusNoContent)
+	})
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("X-Request-ID", "invalid request id")
@@ -65,6 +71,14 @@ func TestInvalidRequestIDIsReplaced(t *testing.T) {
 	requestID := response.Header().Get("X-Request-ID")
 	if !regexp.MustCompile(`^[0-9a-f-]{36}$`).MatchString(requestID) {
 		t.Errorf("X-Request-ID = %q, want generated UUID", requestID)
+	}
+	if handlerHeader != requestID || handlerContextID != requestID {
+		t.Errorf(
+			"request IDs = header %q, context %q, response %q; want one sanitized value",
+			handlerHeader,
+			handlerContextID,
+			requestID,
+		)
 	}
 }
 

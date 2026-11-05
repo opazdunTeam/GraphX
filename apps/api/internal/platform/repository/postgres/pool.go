@@ -9,11 +9,9 @@ import (
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
 
-// Open creates and verifies the PostgreSQL connection pool.
 func Open(ctx context.Context, cfg config.Postgres) (*pgxpool.Pool, error) {
 	poolConfig, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		// Parsing errors can repeat parts of the DSN, including credentials.
 		return nil, errors.New("parse PostgreSQL configuration")
 	}
 

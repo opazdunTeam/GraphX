@@ -30,7 +30,7 @@ func run() error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	logger := logging.New("graphx-api", cfg.LogLevel)
+	logger := logging.New("graphx-api", cfg.LogLevel, cfg.LogFormat)
 	slog.SetDefault(logger)
 
 	processCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -42,7 +42,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	handler := handlers.New(pool, cfg.Postgres.HealthTimeout)
+	handler := handlers.New(pool, cfg.Postgres.HealthTimeout, cfg.Investigation)
 	server := router.NewServer(cfg, logger, handler)
 
 	errCh := make(chan error, 1)

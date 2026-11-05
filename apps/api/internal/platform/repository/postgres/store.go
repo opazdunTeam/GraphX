@@ -10,16 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DBTX is the common query boundary implemented by pgxpool.Pool and pgx.Tx.
-// Concrete repositories accept this interface instead of opening transactions
-// or reaching for a global pool themselves.
 type DBTX interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-// Store owns the database handle used by concrete PostgreSQL repositories.
 type Store struct {
 	db   DBTX
 	pool *pgxpool.Pool
@@ -33,7 +29,6 @@ func newTransactionalStore(tx pgx.Tx) *Store {
 	return &Store{db: tx}
 }
 
-// WithinTransaction executes fn with repositories bound to one transaction.
 func (s *Store) WithinTransaction(
 	ctx context.Context,
 	fn func(*Store) error,

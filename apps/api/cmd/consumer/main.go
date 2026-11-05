@@ -18,7 +18,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := logging.New("graphx-consumer", cfg.LogLevel)
+	logger := logging.New("graphx-consumer", cfg.LogLevel, cfg.LogFormat)
+	slog.SetDefault(logger)
 	logger.Info(
 		"consumer scaffold started",
 		"environment", cfg.Environment,
