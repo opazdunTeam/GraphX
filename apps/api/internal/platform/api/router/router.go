@@ -31,9 +31,18 @@ func NewRouter(logger *slog.Logger, h *handlers.Handler) http.Handler {
 		middlewares.LoggerMiddleware(logger),
 	)
 
+	registerServiceRoutes(router, h)
+	registerBusinessRoutes(router.Group("/api/v1"), h)
+
+	return router
+}
+
+func registerServiceRoutes(router gin.IRoutes, h *handlers.Handler) {
 	router.GET("/health/live", h.HealthCheckHadler)
 	router.GET("/health/ready", h.IsReadyHandler)
+}
 
+func registerBusinessRoutes(router gin.IRoutes, h *handlers.Handler) {
 	router.POST("/investigations", h.Template)
 	router.GET("/investigations/{id}", h.Template)
 	router.GET("/investigations/{id}/status", h.Template)
@@ -41,6 +50,4 @@ func NewRouter(logger *slog.Logger, h *handlers.Handler) http.Handler {
 	router.GET("/claims/{id}/evidence", h.Template)
 	router.GET("/artifacts/{id}/content", h.Template)
 	router.GET("/sources")
-
-	return router
 }
