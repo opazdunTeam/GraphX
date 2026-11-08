@@ -1,9 +1,10 @@
 """Atomic claims emitted by source mappers."""
 
-from datetime import date, datetime
+from calendar import monthrange
+from datetime import date
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class Claim(BaseModel):
@@ -13,7 +14,6 @@ class Claim(BaseModel):
     subject_local_ref: str = Field(min_length=1)
     predicate: str = Field(min_length=1)
     object_local_ref: str | None = Field(default=None, min_length=1)
-    value: Any | None = None
     raw_value: Any | None = None
     normalized_value: Any | None = None
     qualifiers: dict[str, Any] = Field(default_factory=dict)
@@ -24,7 +24,7 @@ class Claim(BaseModel):
     temporal_basis: Literal["explicit", "event_derived", "snapshot", "computed", "unknown"] = (
         "unknown"
     )
-    snapshot_at: datetime | None = None
+    snapshot_at: AwareDatetime | None = None
     evidence_locator: dict[str, Any] = Field(min_length=1)
     evidence_excerpt: str | None = None
 
@@ -34,13 +34,13 @@ class Claim(BaseModel):
             if not self.object_local_ref:
                 raise ValueError("relationship claim requires a non-empty object_local_ref")
         elif self.claim_kind == "attribute" and all(
-            value is None for value in (self.value, self.raw_value, self.normalized_value)
+            value is None for value in (self.raw_value, self.normalized_value)
         ):
             raise ValueError("attribute claim requires a meaningful value")
         elif (
             self.claim_kind == "event"
             and not self.object_local_ref
-            and all(value is None for value in (self.value, self.raw_value, self.normalized_value))
+            and all(value is None for value in (self.raw_value, self.normalized_value))
         ):
             raise ValueError("event claim requires an object reference or meaningful value")
 
@@ -60,11 +60,11 @@ class Claim(BaseModel):
         if (
             self.valid_from is not None
             and self.valid_to is not None
-            and self.valid_from_precision == "day"
-            and self.valid_to_precision == "day"
-            and self.valid_to <= self.valid_from
+            and "approximate" not in (self.valid_from_precision, self.valid_to_precision)
         ):
-            raise ValueError("exact valid_to must be later than valid_from")
+            latest_valid_to = _latest_possible_date(self.valid_to, self.valid_to_precision)
+            if latest_valid_to <= self.valid_from:
+                raise ValueError("valid_to cannot be later than valid_from")
 
         if self.temporal_basis == "unknown" and any(
             value is not None for value in (self.valid_from, self.valid_to, self.snapshot_at)
@@ -72,4 +72,26 @@ class Claim(BaseModel):
             raise ValueError("temporal_basis is required for temporal values")
         if self.temporal_basis == "snapshot" and self.snapshot_at is None:
             raise ValueError("snapshot_at is required when temporal_basis is snapshot")
+        if self.temporal_basis == "snapshot" and any(
+            value is not None for value in (self.valid_from, self.valid_to)
+        ):
+            raise ValueError("snapshot claims cannot contain interval boundaries")
+        if self.temporal_basis == "snapshot" and any(
+            precision != "unknown"
+            for precision in (self.valid_from_precision, self.valid_to_precision)
+        ):
+            raise ValueError("snapshot claims require unknown interval precision")
+        if self.temporal_basis != "snapshot" and self.snapshot_at is not None:
+            raise ValueError("snapshot_at is only allowed for snapshot claims")
         return self
+
+
+def _latest_possible_date(
+    anchor: date, precision: Literal["day", "month", "year", "approximate", "unknown"]
+) -> date:
+    """Return the latest date represented by an exact, month, or year boundary."""
+    if precision == "year":
+        return date(anchor.year, 12, 31)
+    if precision == "month":
+        return date(anchor.year, anchor.month, monthrange(anchor.year, anchor.month)[1])
+    return anchor

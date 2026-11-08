@@ -6,6 +6,7 @@ GraphX - учебный MVP, поэтому не каждая правка тр�
 
 - SQL-миграции поднимаются на чистой базе;
 - OpenAPI и JSON Schema проходят проверку;
+- общие JSON fixtures одинаково проходят strict I-JSON, Schema и semantic validation в Go и Python;
 - adapters разбирают fixtures без сети;
 - consumer повторно получает то же сообщение без двойного эффекта;
 - provenance ведёт от связи до artifact;

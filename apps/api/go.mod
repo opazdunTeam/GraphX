@@ -5,8 +5,10 @@ go 1.27.0
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/goccy/go-yaml v1.19.2
+	github.com/gowebpki/jcs v1.0.2
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/oapi-codegen/runtime v1.8.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )
 
 require (

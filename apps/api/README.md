@@ -12,6 +12,7 @@ apps/api/
 │   ├── api/                 запуск HTTP API
 │   └── consumer/            обработка результатов workers
 └── internal/
+    ├── contractjson/         строгий I-JSON/JCS boundary общих контрактов
     ├── investigations/      жизненный цикл и этапы расследования
     ├── orchestration/       source jobs, повторы и частичный результат
     ├── ingestion/           приём artifacts, records и claims
@@ -37,7 +38,7 @@ apps/api/
 ### Точки запуска
 
 - `cmd/api` собирает зависимости и запускает HTTP-сервер;
-- `cmd/consumer` собирает зависимости и принимает результаты workers из RabbitMQ;
+- `cmd/consumer` сейчас запускает lifecycle scaffold; после подключения messaging runtime эта точка входа будет принимать результаты workers из RabbitMQ.
 
 ### Предметные модули
 
@@ -47,6 +48,8 @@ apps/api/
 - `resolution` формирует кандидатов, reviews и обратимые решения о сопоставлении;
 - `knowledge` владеет каноническими сущностями, утверждениями и фактическими связями;
 - `readmodels` собирает DTO для API.
+
+`contractjson` не является предметным модулем или инфраструктурным adapter. Это узкая общая граница машиночитаемых контрактов: она проверяет исходные JSON bytes на однозначность и совместимость с I-JSON, ограничивает точные целые безопасным диапазоном IEEE 754 и выполняет RFC 8785 canonicalization. Пакет не импортирует `platform` или предметные модули; `platform/rabbitmq` и `ingestion` зависят от него в одном направлении.
 
 ### Platform
 
@@ -71,6 +74,7 @@ apps/api/
 | Gin router или health endpoint              | `internal/platform/api/router`          |
 | HTTP middleware                             | `internal/platform/api/middlewares`     |
 | Сгенерированный HTTP transport              | `internal/platform/api/generated`       |
+| Строгий I-JSON/JCS decode общих контрактов   | `internal/contractjson`                  |
 | SQL-реализация предметного хранилища        | `internal/platform/repository/postgres` |
 | Публикация или получение RabbitMQ-сообщения | `internal/platform/rabbitmq`            |
 | Работа с объектом MinIO                     | `internal/platform/objectstore`         |
@@ -89,7 +93,7 @@ apps/api/
 - серверный интерфейс операций;
 - Gin-адаптер, который разбирает параметры и вызывает реализацию интерфейса.
 
-Для этого используется `oapi-codegen` 2.8.2. Конфигурация находится в `apps/api/oapi-codegen.yaml`, а результат — в `internal/platform/api/generated/openapi.gen.go`. Сгенерированный файл не редактируется вручную и фиксируется в репозитории.
+Для этого используется `oapi-codegen` 2.8.2. Конфигурация находится в `apps/api/oapi-codegen.yaml`, а результат - в `internal/platform/api/generated/openapi.gen.go`. Сгенерированный файл не редактируется вручную и фиксируется в репозитории.
 
 Health endpoints исключены из server generation и остаются ручными маршрутами корневого router. Generated adapter содержит бизнес-операции и регистрируется с `BaseURL: "/api/v1"`, поэтому служебный и бизнес-контуры не смешиваются.
 
@@ -108,11 +112,15 @@ make check-api
 
 `check-api` повторяет генерацию во временный файл, сравнивает committed output и проверяет сохранение union `SubjectInput`, optional limits, business routes и исключение health. Unit tests дополнительно защищают совпадение конфигурационных максимумов с OpenAPI. Общая `make check` включает обе проверки.
 
-JSON Schema из `contracts/schemas/messages` и `contracts/schemas/ingestion` используются только на RabbitMQ-границе:
+Схемы из `contracts/schemas/messages` и `contracts/schemas/ingestion` применяются на входной messaging/ingestion-границе:
 
-- publisher формирует типизированную команду и проверяется контрактным тестом по схеме;
-- consumer выбирает схему по полю `type` и проверяет исходный JSON до применения результата;
-- после проверки схемы `internal/ingestion` выполняет проверки, зависящие от PostgreSQL и текущего состояния задания.
+- `internal/platform/rabbitmq` задаёт типизированные сообщения и выбирает схему по полю `type`;
+- publisher должен проверять сформированную команду, а consumer - исходный JSON до применения результата;
+- загруженный из object storage manifest должен проверяться по ingest-схеме до чтения его содержимого;
+- `internal/ingestion` проверяет переносимую семантику результата: локальные ссылки, счётчики, temporal-правила, JCS digest и соответствие manifest;
+- проверки актуальности попытки и состояния задания выполняются consumer/orchestration перед сохранением в PostgreSQL.
+
+Transport-модели, schema registry и переносимые semantic validators уже реализованы и проверяются общими fixtures. Подключение RabbitMQ consumer/publisher и object storage остаётся отдельным этапом runtime-интеграции.
 
 Go-структуры RabbitMQ и ingest не генерируются из JSON Schema в MVP. Сложные условия схем удобнее выразить в transport-моделях и доменном коде явно, а соответствие контролировать тестами на общих примерах из `contracts/examples`.
 
@@ -137,7 +145,7 @@ go run ./cmd/api
 ```
 
 ```powershell
-# Consumer в отдельном терминале
+# Consumer scaffold в отдельном терминале
 cd apps/api
 go run ./cmd/consumer
 ```
@@ -145,8 +153,7 @@ go run ./cmd/consumer
 ```powershell
 # Проверки
 cd apps/api
-go test ./...
-go vet ./...
+make check
 ```
 
 ### Linux
@@ -160,7 +167,7 @@ go run ./cmd/api
 ```
 
 ```bash
-# Consumer в отдельном терминале
+# Consumer scaffold в отдельном терминале
 cd apps/api
 go run ./cmd/consumer
 ```
@@ -168,12 +175,11 @@ go run ./cmd/consumer
 ```bash
 # Проверки
 cd apps/api
-go test ./...
-go test -race ./...
-go vet ./...
+make check
+make test-race
 ```
 
-`make check` объединяет переносимые unit tests, vet и build. Усиленная команда `make test-race` запускается отдельно в Linux/CI либо в Windows-среде с `CGO_ENABLED=1` и установленным C-компилятором.
+`make check` проверяет актуальность generated HTTP-кода, schemas и общих examples, затем запускает vet, build и unit tests. Усиленная команда `make test-race` запускается отдельно в Linux/CI либо в Windows-среде с `CGO_ENABLED=1` и установленным C-компилятором.
 
 После ручного smoke-запуска тестовая база останавливается и удаляется из `apps/api` командой `docker compose -f docker-compose.test.yaml down -v`.
 

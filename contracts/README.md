@@ -59,11 +59,29 @@ contracts/
 
 Форматы `uuid`, `date`, `date-time` и `uri` должны проверяться валидатором с включённой поддержкой `format`.
 
+До JSON Schema исходные bytes сообщения, manifest или schema-файла проходят одинаковую строгую проверку в Go и Python:
+
+- документ обязан быть однозначным JSON-объектом без повторяющихся имён свойств и trailing data;
+- числовой ввод обязан быть совместим с I-JSON и RFC 8785;
+- точные целые значения допустимы в диапазоне `±(2^53−1)`; большие идентификаторы передаются строками.
+
+Эти условия относятся к transport boundary, но не выражаются самой JSON Schema: обычный разбор в map уже потерял бы информацию о повторяющихся ключах. В Go правила сосредоточены в `internal/contractjson`, в Python - в `contracts.schema.decode_contract_json`. После raw-проверки JSON Schema отвечает за переносимую форму, а semantic validators - за ссылки, счётчики, temporal semantics, digest и manifest.
+
 ## Режимы результата
 
 Небольшой результат передаётся прямо в `source.collect.completed.v1`. Крупный результат сохраняется в MinIO по схеме `source-result-manifest.v1.schema.json`, а сообщение содержит ссылку на него вместо records и claims. Эти режимы не смешиваются. Manifest не заменяет исходные материалы: их ссылки остаются в `artifacts`.
 
-Примеры в `examples` поясняют форму данных, но не заменяют схемы. Они станут входными данными контрактных тестов при реализации publisher, workers и consumer.
+Примеры в `examples` поясняют форму данных, но не заменяют схемы. Сейчас они служат общими fixtures для Go и Python контрактных тестов; будущие publisher и consumer должны использовать тот же набор для проверки сериализации.
+
+Проверка RabbitMQ- и ingestion-контрактов выполняется из корня репозитория:
+
+```bash
+cd apps/api
+make check-contracts
+
+cd ../../workers
+uv run pytest
+```
 
 ## Как контракты входят в код
 
@@ -71,8 +89,8 @@ contracts/
 | --------------------- | ------------------------------------------------------------------------------------- |
 | `openapi.yaml`        | Генерация Go HTTP-типов, серверного интерфейса и Gin-адаптера через `oapi-codegen`    |
 | `openapi.yaml`        | Генерация TypeScript-типов web-клиента через `openapi-typescript`                     |
-| Message JSON Schema   | Проверка входящих RabbitMQ-сообщений в Go consumer и контрактные тесты publishers     |
-| Ingestion JSON Schema | Проверка результата worker, manifest и общих переносимых типов                        |
+| Message JSON Schema   | Schema registry, общие Go/Python fixtures и будущая проверка publisher/consumer        |
+| Ingestion JSON Schema | Проверка результата worker, manifest и общих переносимых типов в Go и Python           |
 | `examples`            | Общие fixtures для Go- и Python-контрактных тестов, а также понятные человеку образцы |
 
 OpenAPI является источником генерируемого transport-кода, но не бизнес-логики. JSON Schema в MVP не используются для генерации Pydantic или Go моделей: модели остаются небольшими и явными, а схемы независимо проверяют их сериализованное представление.

@@ -39,7 +39,7 @@ landing/          статический лендинг для демонстр�
 
 ## Начало работы
 
-Требуются Go 1.27, Python 3.15, `uv`, Node.js 24, pnpm 11 и Docker Compose для локальной PostgreSQL 18. `.env.example` содержит общий перечень переменных проекта. Значения передаются через shell, Compose или среду запуска; автоматическая загрузка `.env` не является частью runtime.
+Требуются Go 1.27, Python 3.15, `uv`, Node.js 24, pnpm 11, GNU Make и Docker Compose для локальной PostgreSQL 18. `.env.example` содержит общий перечень переменных проекта. Значения передаются через shell, Compose или среду запуска; автоматическая загрузка `.env` не является частью runtime.
 
 Команды выполняются из корня репозитория. API, workers и web запускаются в отдельных терминалах. Правила запуска и проверки Go-модуля описаны в [`apps/api/README.md`](apps/api/README.md#запуск-и-проверка).
 
@@ -101,8 +101,7 @@ pnpm dev
 
 ```powershell
 cd apps/api
-go test ./...
-go vet ./...
+make check
 
 cd ../../workers
 uv run ruff check .
@@ -118,8 +117,7 @@ pnpm build
 
 ```bash
 cd apps/api
-go test ./...
-go vet ./...
+make check
 
 cd ../../workers
 uv run ruff check .

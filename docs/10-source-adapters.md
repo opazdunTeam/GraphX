@@ -36,6 +36,8 @@ Source record хранит `local_ref`, `artifact_local_ref`, внешний и�
 
 Claim атомарен и содержит исходное и нормализованное значения, qualifiers, известные временные границы, их точность и основание, snapshot time, locator и при необходимости короткий excerpt. Версии parser, mapping и normalization передаются один раз на уровне результата; Go записывает их в processing run и созданные claims.
 
+Произвольные значения в `raw_data`, claim values и qualifiers обязаны оставаться совместимыми с I-JSON и JCS. Большие внешние идентификаторы и другие значения, которым нужна точная целочисленная семантика за пределами `±(2^53−1)`, adapter передаёт строками, а не JSON numbers.
+
 Manifest используется, когда результат слишком велик для RabbitMQ. Inline и manifest являются взаимоисключающими режимами: при manifest records и claims не дублируются в сообщении, а `record_count` относится к содержимому manifest. Сам файл соответствует `contracts/schemas/ingestion/source-result-manifest.v1.schema.json`, а ссылка обязана иметь `kind = manifest` и `media_type = application/json`. Исходные artifacts всё равно перечисляются в результате, чтобы records из manifest могли ссылаться на них. Runtime формирует manifest, окончательное сообщение и digest, поэтому adapter возвращает содержательный результат, но не вычисляет transport envelope самостоятельно.
 
 Claim не бывает «пустым». Relationship claim содержит непустой `object_local_ref`; attribute содержит хотя бы одно содержательное исходное или нормализованное значение; event содержит объект либо такое значение. Если источник явно сообщает отсутствие признака, mapper создаёт понятный predicate с булевым либо статусным значением, а не передаёт неразличимый `null`.
