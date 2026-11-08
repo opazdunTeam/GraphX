@@ -1,24 +1,27 @@
 package router
 
 import (
-	"GraphX/internal/platform/api/handlers"
-	"GraphX/internal/platform/api/middlewares"
-	"GraphX/internal/platform/config"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/handlers"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/middlewares"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
+
+const businessBaseURL = "/api/v1"
 
 func NewServer(cfg config.Config, logger *slog.Logger, h *handlers.Handler) *http.Server {
 	return &http.Server{
-		Addr:              cfg.Server.Host,
+		Addr:              cfg.HTTP.Addr,
 		Handler:           NewRouter(logger, h),
-		ReadHeaderTimeout: time.Duration(cfg.Server.Read_header_timeout) * time.Second,
-		ReadTimeout:       time.Duration(cfg.Server.Read_timeout) * time.Second,
-		WriteTimeout:      time.Duration(cfg.Server.Write_timeout) * time.Second,
-		IdleTimeout:       time.Duration(cfg.Server.Idle_timeout) * time.Second,
+		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTP.ReadTimeout,
+		WriteTimeout:      cfg.HTTP.WriteTimeout,
+		IdleTimeout:       cfg.HTTP.IdleTimeout,
 	}
 }
 
@@ -27,20 +30,34 @@ func NewRouter(logger *slog.Logger, h *handlers.Handler) http.Handler {
 	router := gin.New()
 	router.Use(
 		middlewares.RequestIDMiddleware(),
-		middlewares.RecoverMiddleware(logger),
 		middlewares.LoggerMiddleware(logger),
+		middlewares.RecoverMiddleware(logger),
 	)
 
-	router.GET("/health/live", h.HealthCheckHadler)
-	router.GET("/health/ready", h.IsReadyHandler)
-
-	router.POST("/investigations", h.Template)
-	router.GET("/investigations/{id}", h.Template)
-	router.GET("/investigations/{id}/status", h.Template)
-	router.POST("POST /investigations/{id}/cancel", h.Template)
-	router.GET("/claims/{id}/evidence", h.Template)
-	router.GET("/artifacts/{id}/content", h.Template)
-	router.GET("/sources")
+	registerServiceRoutes(router, h)
+	registerBusinessRoutes(router, h)
 
 	return router
+}
+
+func registerServiceRoutes(router gin.IRoutes, h *handlers.Handler) {
+	router.GET("/health/live", h.Liveness)
+	router.GET("/health/ready", h.Readiness)
+}
+
+func registerBusinessRoutes(router gin.IRouter, h generated.ServerInterface) {
+	generated.RegisterHandlersWithOptions(router, h, generated.GinServerOptions{
+		BaseURL:      businessBaseURL,
+		ErrorHandler: generatedErrorHandler,
+	})
+}
+
+func generatedErrorHandler(c *gin.Context, _ error, statusCode int) {
+	utils.WriteProblem(
+		c,
+		statusCode,
+		"INVALID_REQUEST",
+		http.StatusText(statusCode),
+		"The request does not match the HTTP API contract.",
+	)
 }

@@ -1,18 +1,13 @@
 package maperrors
 
 import (
-	"GraphX/internal/platform/api/utils"
-	"GraphX/internal/platform/apperrors"
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/apperrors"
 )
-
-type ErrorHandler struct {
-	logger *slog.Logger
-}
 
 func HandleError(c *gin.Context, err error) {
 	switch {

@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.8.2/configuration-schema.json
+package: generated
+
+generate:
+  gin-server: true
+  models: true
+
+output-options:
+  # Operational health endpoints remain manual root routes because their
+  # lifecycle and dependency checks belong to the Go runtime, not business API.
+  exclude-tags:
+    - health

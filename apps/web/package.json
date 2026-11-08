@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.6.0",
+  "packageManager": "pnpm@11.28.11",
   "engines": {
     "node": ">=24.0.0",
     "pnpm": ">=11.0.0"
@@ -12,33 +12,36 @@
     "dev": "vite",
     "build": "pnpm typecheck && pnpm build-only",
     "build-only": "vite build",
+    "generate:api": "openapi-typescript ../../contracts/openapi.yaml -o src/shared/api/generated/openapi.ts",
+    "check:api": "node scripts/check-generated-api.mjs",
     "typecheck": "vue-tsc --build",
     "lint": "eslint --max-warnings=0 src tests vite.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest",
     "test:run": "vitest run",
-    "check": "pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
+    "check": "pnpm check:api && pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
   },
   "dependencies": {
-    "pinia": "4.0.3",
-    "vue": "3.5.43",
-    "vue-router": "5.3.1"
+    "pinia": "4.1.0",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@types/node": "26.6.4",
-    "@vitejs/plugin-vue": "6.0.9",
+    "@types/node": "26.6.6",
+    "@vitejs/plugin-vue": "6.0.10",
     "@vue/test-utils": "2.5.1",
-    "eslint": "10.12.0",
-    "eslint-plugin-vue": "10.11.1",
-    "globals": "17.13.0",
-    "jsdom": "30.1.2",
-    "prettier": "3.9.9",
-    "typescript": "6.0.3",
-    "typescript-eslint": "8.71.0",
-    "vite": "8.3.2",
-    "vitest": "5.0.3",
-    "vue-tsc": "3.3.12"
+    "eslint": "10.14.0",
+    "eslint-plugin-vue": "10.12.0",
+    "globals": "17.14.0",
+    "jsdom": "30.1.3",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.1.0",
+    "vue-tsc": "3.3.14"
   }
 }
