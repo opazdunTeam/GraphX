@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -57,12 +58,29 @@ func (h *Handler) CreateInvestigation(
 	_ generated.CreateInvestigationParams,
 ) {
 	if _, err := h.bindCreateInvestigationRequest(c); err != nil {
+		status := http.StatusBadRequest
+		code := "INVALID_REQUEST"
+		title := "Invalid request"
+		detail := "The request body does not match the HTTP API contract."
+		var maxBytesError *http.MaxBytesError
+		switch {
+		case errors.Is(err, errUnsupportedMediaType):
+			status = http.StatusUnsupportedMediaType
+			code = "UNSUPPORTED_MEDIA_TYPE"
+			title = "Unsupported media type"
+			detail = "The request body must use application/json."
+		case errors.As(err, &maxBytesError):
+			status = http.StatusRequestEntityTooLarge
+			code = "REQUEST_TOO_LARGE"
+			title = "Request too large"
+			detail = "The request body exceeds the allowed size."
+		}
 		utils.WriteProblem(
 			c,
-			http.StatusBadRequest,
-			"INVALID_REQUEST",
-			"Invalid request",
-			"The request body does not match the HTTP API contract.",
+			status,
+			code,
+			title,
+			detail,
 		)
 		return
 	}

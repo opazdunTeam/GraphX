@@ -172,6 +172,45 @@ func TestCreateInvestigationRejectsInvalidLimits(t *testing.T) {
 	}
 }
 
+func TestCreateInvestigationRejectsUnsupportedMediaType(t *testing.T) {
+	router := testRouter(&readinessStub{})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/investigations",
+		strings.NewReader(`{"subject":{"type":"person","name":"Ada"}}`),
+	)
+	request.Header.Set("Content-Type", "text/plain")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000001")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnsupportedMediaType)
+	}
+	if !strings.Contains(response.Body.String(), `"code":"UNSUPPORTED_MEDIA_TYPE"`) {
+		t.Errorf("body = %s, want unsupported media type problem", response.Body.String())
+	}
+}
+
+func TestCreateInvestigationRejectsOversizedBody(t *testing.T) {
+	router := testRouter(&readinessStub{})
+	response := httptest.NewRecorder()
+	body := `{"subject":{"type":"person","name":"` +
+		strings.Repeat("a", 1<<20) +
+		`"}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/investigations", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000001")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+	if !strings.Contains(response.Body.String(), `"code":"REQUEST_TOO_LARGE"`) {
+		t.Errorf("body = %s, want request too large problem", response.Body.String())
+	}
+}
+
 func TestGeneratedRouteRejectsInvalidUUID(t *testing.T) {
 	router := testRouter(&readinessStub{})
 	response := httptest.NewRecorder()

@@ -25,6 +25,7 @@ func run() error {
 	testCommand := exec.Command(
 		"go",
 		"test",
+		"-count=1",
 		"-tags=integration",
 		"./internal/platform/repository/postgres",
 		"-v",

@@ -1012,6 +1012,8 @@ export interface operations {
             };
             400: components["responses"]["ProblemResponse"];
             409: components["responses"]["ProblemResponse"];
+            413: components["responses"]["ProblemResponse"];
+            415: components["responses"]["ProblemResponse"];
         };
     };
     getInvestigation: {

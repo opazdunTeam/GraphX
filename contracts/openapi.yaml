@@ -102,6 +102,10 @@ paths:
           $ref: "#/components/responses/ProblemResponse"
         "409":
           $ref: "#/components/responses/ProblemResponse"
+        "413":
+          $ref: "#/components/responses/ProblemResponse"
+        "415":
+          $ref: "#/components/responses/ProblemResponse"
   /investigations/{investigation_id}:
     get:
       operationId: getInvestigation

@@ -97,6 +97,8 @@ Health endpoints исключены из server generation и остаются �
 
 Необязательные limits нормализуются методом `Handler.ResolveInvestigationLimits`. Defaults и deployment-максимумы берутся из `INVESTIGATION_DEFAULT_*` и `INVESTIGATION_MAX_*`; конфигурация не может расширить публичные границы OpenAPI. Defaults намеренно не записаны в OpenAPI, чтобы generated-клиенты продолжали считать поля optional.
 
+Generated Gin adapter разбирает path, query и header parameters, но request body остаётся ответственностью ручного handler. Create-investigation boundary проверяет `application/json`, ограничивает тело 1 MiB и исполняет структурные правила `SubjectInput` и limits до передачи значений будущему предметному use case.
+
 Команды из `apps/api`:
 
 ```bash
