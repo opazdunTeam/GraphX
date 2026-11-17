@@ -30,11 +30,11 @@ flowchart LR
 
 ### Исследования и источники
 
-`investigations` хранит входные данные, этап, общий статус, ограничения, число ожидающих решений и `state_version`. Основные статусы: `created`, `running`, `completed`, `completed_partial`, `failed`, `cancelled`. Этапы: `subject_discovery`, `subject_resolution`, `enrichment`, `analysis`, `completed`.
+`investigations` хранит входные данные, этап, общий статус, ограничения, число ожидающих решений и `state_version`. Основные статусы: `created`, `running`, `completed`, `completed_partial`, `failed`, `cancelled`. Этапы: `subject_discovery`, `subject_resolution`, `enrichment`, `analysis`, `completed`. Новая строка всегда начинается в `created` / `subject_discovery`; рабочие и terminal-состояния достигаются только через документированные `UPDATE`-переходы.
 
 `sources` - справочник адаптеров: код, название, режим работы, признак включения и порядок запуска. Секретов в этой таблице нет.
 
-`source_jobs` - бизнес-состояние обращения к источнику. Оно не является копией очереди. Поля должны включать расследование, источник, операцию, назначение, status, номер попытки, лимит попыток, время следующего повтора, request hash, idempotency key и сведения об ошибке.
+`source_jobs` - бизнес-состояние обращения к источнику. Оно не является копией очереди. Поля должны включать расследование, источник, операцию, назначение, status, номер попытки, лимит попыток, время следующего повтора, request hash, idempotency key и сведения об ошибке. Новая строка создаётся только для `running` investigation в состоянии `pending` с `attempt_no = 1`. Переходы, запускающие или планирующие работу (`pending`, `queued`, `running`, `retry_wait`), повторно проверяют investigation под блокировкой; terminal investigation не может получить новую или возобновлённую работу.
 
 Статусы задания: `pending`, `queued`, `running`, `retry_wait`, `succeeded`, `not_found`, `action_required`, `unavailable`, `failed`, `cancelled`.
 
@@ -48,7 +48,7 @@ flowchart LR
 
 `processing_runs` хранит отдельный запуск parser/mapper: artifact, результат попытки, который создал первоначальный запуск, область обработки, версии схемы и кода, статус и связь с заменённым запуском. `source_job_result_id` обязателен для обычного source collection; будущий повторный разбор сохранённого artifact сможет создать запуск другого происхождения после появления отдельного контракта reprocessing. Для одного artifact и одной области может быть только один активный успешный запуск.
 
-`source_records` - минимальные записи источника, которые можно независимо сопоставить с сущностью. Сохраняются внешний идентификатор, тип, исходный JSON, версия схемы и ссылка на запуск обработки. В ingest-контракте `artifact_local_ref` однозначно определяет исходный материал, для которого Go создаёт этот processing run.
+`source_records` - минимальные записи источника, которые можно независимо сопоставить с сущностью. Сохраняются внешний идентификатор, тип, исходный JSON, версия схемы и ссылка на запуск обработки. В ingest-контракте `artifact_local_ref` однозначно определяет исходный материал, для которого Go создаёт этот processing run. Источник записи однозначно восстанавливается через processing run и artifact, поэтому `source_id` в record не дублируется; поиск внешнего идентификатора поддерживает частичный индекс `(record_type, external_id)`.
 
 `claims` - атомарные проверяемые утверждения. Claim содержит вид (`attribute`, `relationship`, `event`), predicate, исходное `raw_value`, нормализованное `normalized_value`, qualifiers, временные поля и locator доказательства. Отдельного третьего поля `value` нет: прикладное представление выбирает нормализованное значение, а при его отсутствии - исходное. Claim не может быть пустым: relationship требует объект, attribute - содержательное исходное либо нормализованное значение, а event - объект либо такое значение. Явное отсутствие выражается отдельным predicate и значением, например `has_registration_number = false`, а не неразличимым `null`. Версии parser/mapping/normalization Go берёт из результата обработки и записывает в каждый созданный claim.
 
@@ -60,15 +60,15 @@ flowchart LR
 
 `entities` хранит канонический объект, его тип, отображаемое имя и статус. В MVP используется только статус `active`; отдельный жизненный цикл merge/split не вводится до появления такого сценария.
 
-`entity_names` и `entity_identifiers` - нормализованные проекции из claims. Они должны хранить ссылку на claim, исходное значение, версию нормализации и признак актуальной материализации. Для имён также нужны язык, письменность и вид варианта; для идентификаторов - тип, юрисдикция и issuer.
+`entity_names` и `entity_identifiers` - нормализованные проекции из claims. Они должны хранить ссылку на claim, исходное значение, версию нормализации и признак актуальной материализации. Новая projection всегда вставляется активной и только при существующей active link; историческое `active = false` возникает исключительно через однонаправленную деактивацию. Поскольку links появляются в следующей миграции, переход 005→006 блокирует DML обеих projection-таблиц и требует, чтобы они были полностью пусты: никакая active или искусственно деактивированная orphan-строка не может быть молча легализована. Для имён также нужны язык, письменность и вид варианта; для идентификаторов - тип, юрисдикция и issuer.
 
-`entity_records` связывает source record с entity. Связь должна быть отменяемой: сохраняются решение, способ связывания, время link/unlink. В один момент у record может быть не больше одной активной entity.
+`entity_records` связывает source record с entity только через обязательное append-only matching decision. Связь должна быть отменяемой: сохраняются решение, способ связывания, время link/unlink. В один момент у record может быть не больше одной активной entity. Прямой unlink запрещён: только текущий `revert` атомарно закрывает link и деактивирует полученные из claims этой записи name/identifier projections; повторное связывание создаёт новые строки истории. Link, projection и decision/revert сериализуются блокировками соответствующих review/link, поэтому конкурентная операция не может материализовать уже отменённое решение.
 
-`match_reviews` хранит задачу на проверку совпадения, версию набора кандидатов и `lock_version`.
+`match_reviews` хранит задачу на проверку совпадения, текущую версию набора кандидатов и `lock_version`. Review всегда создаётся открытым, без `resolved_at`, с `candidate_set_version = 1` и `lock_version = 1`; закрыть его может только decision. Обновление набора выполняется только для открытого review и увеличивает обе версии на единицу.
 
-`match_candidates` хранит кандидата, score, признаки, конфликты и рекомендацию алгоритма. Score - вспомогательная величина, а не вероятность.
+`match_candidates` хранит версию набора, кандидата, score, признаки, конфликты и рекомендацию алгоритма. Опубликованный кандидат не переписывается; новый расчёт создаёт строки следующей версии. Score - вспомогательная величина, а не вероятность.
 
-`match_decisions` - неизменяемый журнал решений: выбранный кандидат или `none_of_above`, автор решения, причина, версия алгоритма и ссылка на отменённое решение.
+`match_decisions` - неизменяемая линейная цепочка решений: выбранный кандидат, `none_of_above` или явный `revert`, resolved entity, ожидаемая версия review, автор, причина, версия алгоритма и ссылка на предыдущую head-запись. Для `revert` обязательна непустая причина длиной не более 2000 символов. Вставка decision атомарно закрывает или переоткрывает review и увеличивает `lock_version`. `entity_records` ссылается только на текущее решение и обязана совпадать с его source record и resolved entity; закрытая link не реактивируется. После отмены investigation новые reviews, non-revert decisions, links и membership не создаются; cleanup через revert остаётся допустимым.
 
 ### Связи и граф
 
@@ -76,7 +76,7 @@ flowchart LR
 
 `relationship_claims` связывает факт с подтверждающими claims и указывает роль поддержки.
 
-`investigation_entities` определяет, какие entities входят в конкретное расследование, на какой глубине и почему были добавлены.
+`investigation_entities` определяет, какие entities входят в конкретное расследование, на какой глубине и почему были добавлены. Membership append-only: её identity и metadata не переписываются и не удаляются; будущая поддержка исключения entity потребует отдельного исторического события, а не изменения provenance-записи.
 
 Будущие `events` и `event_claims` нужны для удобной материализации назначений, прекращений полномочий и других событий. В первую миграцию их не включаем: сначала проверяем модель на данных KASE.
 
@@ -84,11 +84,11 @@ flowchart LR
 
 `outbox_messages` хранит сообщения, которые нужно опубликовать после транзакции.
 
-`consumed_messages` защищает consumer по паре `consumer_name + message_id`.
+`consumed_messages` защищает consumer по паре `consumer_name + message_id` и является append-only до появления отдельной retention policy. Business payload outbox неизменяем, а после публикации неизменяема вся строка.
 
 `source_job_results` - запись результата одной попытки. Пара `(source_job_id, attempt_no)` уникальна и допускает не больше одного принятого business result независимо от количества RabbitMQ deliveries и `message_id`. Таблица хранит исходный `message_id`, канонический digest payload, `applied` и причину игнорирования. Для completed consumer сверяет переданный worker digest со своим расчётом; для failed, где digest не передаётся транспортом, consumer рассчитывает его сам по каноническому payload. Повтор той же попытки с тем же digest не применяется повторно, а другой digest для уже принятой попытки считается конфликтом контракта и не заменяет сохранённый результат.
 
-`api_idempotency_keys` защищает повторные команды клиента, например подтверждение кандидата.
+`api_idempotency_keys` защищает повторные команды клиента, например подтверждение кандидата. Request identity и expiry неизменяемы, response заполняется один раз, а удаление допускается только после истечения срока.
 
 ## Ограничения и индексы
 
@@ -101,16 +101,19 @@ flowchart LR
 - пара `(source_job_result_id, artifact_id)` в `processing_runs` ссылается на `source_job_result_artifacts`; для `processing_scope = 'source_collection'` result обязателен;
 - `applied = true` требует `ignored_reason IS NULL`, а `applied = false` - непустую причину;
 - source record уникален по `(processing_run_id, local_ref)`, но межrecord-ссылки claim после ingest хранятся как UUID, а не как local refs;
-- `pg_trgm` индексируется только по активным нормализованным именам;
+- shared extension `pg_trgm` устанавливается стартовой серией; неизменяемый для обычного DML ownership marker позволяет rollback удалить только extension, созданный GraphX, и сохранить заранее установленный объект. Индекс активных нормализованных имён относится к отдельной задаче candidate generation #31;
+- применённый result обязан относиться к текущей попытке активного job и работающего investigation; поздние и stale results сохраняются только как неприменённые receipts;
+- artifacts, result-artifact links, records и claims append-only; processing run допускает только контролируемый lifecycle и однонаправленную деактивацию;
+- object-ссылка claim не может пересекать границу `source_job_result`;
+- candidate set, линейная decision/revert chain и entity link связаны версией, review, record и resolved entity;
 - JSONB используется для исходных и действительно источник-зависимых полей, а не вместо нормальной схемы;
 - точные интервалы проверяются условием `valid_to > valid_from`; для границ с точностью month, year или approximate учитывается неопределённость, а не только дата-якорь.
 
 ## Разбиение миграций
 
-1. Расширения, `investigations`, `sources`.
+1. Shared extension `pg_trgm`, `investigations` и `sources`.
 2. `source_jobs`, outbox, inbox, business deduplication и API idempotency.
 3. `artifacts`, `source_job_result_artifacts`, `processing_runs`, `source_records`, `claims`.
-4. `entities`, `entity_names`, `entity_identifiers`, `entity_records`.
-5. Reviews, candidates и decisions.
-6. Relationships, supporting claims и состав расследования.
-7. Events - после проверки модели на реальных данных.
+4. Идемпотентный seed минимального каталога sources, включая fixture; на этом заканчивается стартовая серия.
+5. `entities`, `entity_names` и `entity_identifiers`.
+6. Reviews, candidates, decisions, обратимые `entity_records` и состав расследования.
