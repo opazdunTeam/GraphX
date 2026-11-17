@@ -2,15 +2,17 @@
 
 `migrations/` содержит вручную написанные SQL-миграции goose. Схема не управляется ORM/AutoMigrate.
 
-План последовательности миграций:
-1. расширения PostgreSQL, `investigations`, `sources`;
-2. `source_jobs`, outbox, inbox, business deduplication и API idempotency;
-3. `artifacts`, `source_job_result_artifacts`, `processing_runs`, `source_records`, `claims`;
-4. `entities`, `entity_names`, `entity_identifiers`, `entity_records`;
-5. reviews, candidates и decisions;
-6. relationships, supporting claims и состав расследования;
-7. events - только после проверки реальных event claims.
+Текущая последовательность миграций:
 
-Смысл таблиц и основные инварианты описаны в [модели данных](../docs/07-data-model.md). После появления миграций именно SQL определяет точную физическую схему. До первой миграции каталог сохраняется существующим `.gitkeep`.
+1. `001_core.sql` - shared extension `pg_trgm`, `investigations` и `sources`;
+2. `002_messaging_jobs.sql` - outbox, inbox, `source_jobs`, business deduplication и API idempotency;
+3. `003_ingestion.sql` - `artifacts`, provenance результата, `processing_runs`, `source_records` и `claims`;
+4. `004_seed_sources.sql` - идемпотентный минимальный каталог sources с fixture; эта версия завершает стартовую серию задачи #8. Down намеренно является no-op: справочная строка может быть связана с provenance-данными и окончательно удаляется вместе с `sources` при откате `001_core`;
+5. `005_entities.sql` - `entities`, активные проекции имён и идентификаторов;
+6. `006_matching.sql` - reviews, candidates, append-only decisions, обратимые links записей к entities и состав расследования; эта версия завершает задачу #72.
+
+Смысл таблиц и основные инварианты описаны в [модели данных](../docs/07-data-model.md). SQL определяет точную физическую схему, а ERD должна обновляться вместе с изменением состава таблиц и колонок.
 
 Миграции запускаются отдельно от API. Команды `migrate-status`, `migrate-up`, `migrate-down` и защищённый `migrate-reset-local` определены в [`apps/api/Makefile`](../apps/api/Makefile). Они используют `POSTGRES_DSN` и закреплённую версию goose. Локальный reset допустим только для пустой учебной базы с `APP_ENV=local` и `CONFIRM_RESET=1`.
+
+`make test-integration` поднимает PostgreSQL 18, проверяет оба пути владения `pg_trgm` (preinstalled и созданный миграцией), защиту ownership-marker, конфликтующий и повторный fixture seed, no-op rollback fixture после появления зависимого job, границы версий 4/5/6, отказ перехода 5→6 при любых active/inactive orphan projections и конкурентную блокировку их вставки, pgx и migration integration tests, полный goose reset. После прогона удаляются тестовые контейнер и сеть; данные PostgreSQL хранятся в `tmpfs` и исчезают вместе с контейнером.
