@@ -52,6 +52,8 @@ MinIO- или HTTP-реализаций: он объявляет только м
 | Inline/manifest выбор, сериализация manifest и JCS digest | `runtime` |
 | Стабильные transport error codes | `contracts/errors.py`, экспорт через `sdk` |
 
+`AdapterContext.logger` предназначен только для скалярных operational metadata из явного allowlist; остальные context-поля отбрасываются, а structured values закрываются целиком. Адаптер не передаёт в сообщение или structured context raw payload, HTTP headers/body, credentials, URL/URI, полные документы и лишние персональные данные; исходный ответ сохраняется через `save_artifact`.
+
 `CollectRequest` намеренно не содержит `job_id`, `attempt_no`, `investigation_id`, `source`
 или envelope metadata. Runtime выбирает adapter по transport-команде и передаёт ему только
 `operation`, `purpose`, `query`, limits и deadline. `CollectResult` также не содержит manifest
@@ -96,6 +98,7 @@ uv run graphx-source-worker --check
 uv run graphx-document-worker --check
 uv run graphx-browser-worker --check
 
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest
@@ -110,6 +113,7 @@ uv run graphx-source-worker --check
 uv run graphx-document-worker --check
 uv run graphx-browser-worker --check
 
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest

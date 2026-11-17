@@ -82,6 +82,13 @@ class ProgressReporter(Protocol):
 
 
 class AdapterContext(Protocol):
+    """Runtime capabilities exposed to adapters.
+
+    Logger context is for allowlisted scalar operational metadata only. Adapters must
+    persist raw responses via ``save_artifact`` and must never log payloads, headers,
+    credentials, URLs, full documents, or unnecessary personal data.
+    """
+
     http: HTTPClient
     rate_limiter: RateLimiter
     logger: logging.Logger
