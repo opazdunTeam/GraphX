@@ -30,15 +30,41 @@ select {
   font: inherit;
 }
 
-.shell {
-  display: grid;
+.app-layout {
   min-height: 100vh;
-  place-items: center;
+}
+
+.app-header {
+  display: flex;
+  min-height: 4rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #263746;
+  background: #0e1720;
+}
+
+.app-brand {
+  color: #e9eef5;
+  font-size: 1.125rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+
+.app-navigation {
+  display: flex;
+  gap: 1rem;
+}
+
+.app-content {
+  min-height: calc(100vh - 4rem);
   padding: 2rem;
 }
 
 .hero {
   width: min(48rem, 100%);
+  margin: clamp(2rem, 10vh, 8rem) auto;
 }
 
 .eyebrow {
@@ -89,4 +115,71 @@ h1 {
 .status-card dd {
   margin: 0.35rem 0 0;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.async-state {
+  width: min(32rem, 100%);
+  padding: 1.5rem;
+  border: 1px solid #263746;
+  border-radius: 0.75rem;
+  background: #111b25;
+}
+
+.async-state h2,
+.async-state p {
+  margin: 0;
+}
+
+.async-state p + p,
+.async-state h2 + p,
+.state-actions {
+  margin-top: 0.75rem;
+}
+
+.error-state {
+  border-color: #8f4650;
+}
+
+.request-id {
+  color: #8194a6;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.loading-indicator {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.75rem;
+  border: 2px solid #456274;
+  border-top-color: #70d7c7;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.async-state[aria-busy='true'] {
+  display: flex;
+  align-items: center;
+}
+
+.async-state button {
+  margin-top: 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #456274;
+  border-radius: 0.5rem;
+  color: inherit;
+  background: #172635;
+  cursor: pointer;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-indicator {
+    animation: none;
+  }
 }
