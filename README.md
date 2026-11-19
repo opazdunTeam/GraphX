@@ -104,6 +104,7 @@ cd apps/api
 make check
 
 cd ../../workers
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest
@@ -120,6 +121,7 @@ cd apps/api
 make check
 
 cd ../../workers
+uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest

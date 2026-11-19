@@ -14,13 +14,14 @@
     "build-only": "vite build",
     "generate:api": "openapi-typescript ../../contracts/openapi.yaml -o src/shared/api/generated/openapi.ts",
     "check:api": "node scripts/check-generated-api.mjs",
+    "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "typecheck": "vue-tsc --build",
-    "lint": "eslint --max-warnings=0 src tests vite.config.ts",
+    "lint": "eslint --max-warnings=0 .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest",
     "test:run": "vitest run",
-    "check": "pnpm check:api && pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
+    "check": "pnpm check:api && pnpm check:architecture && pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
   },
   "dependencies": {
     "pinia": "4.1.0",

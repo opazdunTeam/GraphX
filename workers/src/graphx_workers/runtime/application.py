@@ -42,7 +42,7 @@ async def run_forever(settings: WorkerSettings, logger: logging.Logger) -> None:
 def run(kind: WorkerKind, argv: Sequence[str] | None = None) -> int:
     args = build_parser(kind).parse_args(argv)
     settings = WorkerSettings(worker_kind=kind)
-    logger = configure_logging(settings.log_level)
+    logger = configure_logging(settings.log_level, settings.log_format)
 
     if args.check:
         logger.info("configuration valid", extra={"context": settings.safe_summary()})

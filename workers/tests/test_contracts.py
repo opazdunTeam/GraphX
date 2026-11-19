@@ -30,9 +30,7 @@ EXAMPLES = ROOT / "contracts" / "examples"
 
 
 def load_json(relative_path: str) -> dict[str, Any]:
-    return cast(
-        dict[str, Any], json.loads((EXAMPLES / relative_path).read_text(encoding="utf-8"))
-    )
+    return cast(dict[str, Any], json.loads((EXAMPLES / relative_path).read_text(encoding="utf-8")))
 
 
 @pytest.fixture(scope="module")
@@ -91,9 +89,7 @@ def test_completed_fixtures_pass_semantic_validation(registry: ContractSchemaReg
     stored_bytes = (EXAMPLES / "ingestion/source-result-manifest.v1.json").read_bytes()
     manifest_document = registry.validate_manifest_json(stored_bytes)
     manifest = SourceResultManifest.model_validate(manifest_document)
-    validate_source_result_semantics(
-        manifest_message.payload, manifest_message_document["payload"]
-    )
+    validate_source_result_semantics(manifest_message.payload, manifest_message_document["payload"])
     validate_manifest_semantics(manifest_message.payload, manifest, stored_bytes)
 
 

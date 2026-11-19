@@ -3,7 +3,7 @@
 import re
 from datetime import timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,7 +24,7 @@ class WorkerSettings(BaseSettings):
 
     app_env: str = "local"
     log_level: str = "info"
-    log_format: str = "json"
+    log_format: Literal["json", "text"] = "json"
     worker_kind: WorkerKind = WorkerKind.SOURCE
     worker_concurrency: PositiveInt = 4
     worker_heartbeat_interval: timedelta = Field(default=timedelta(seconds=15))
