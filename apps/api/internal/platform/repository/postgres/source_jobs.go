@@ -11,7 +11,7 @@ import (
 	"github.com/opazdunTeam/GraphX/apps/api/internal/orchestration"
 )
 
-func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, outboxID, messagePayloadJSON string) error {
+func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, message orchestration.OutboxMessage) error {
 	if strings.TrimSpace(job.ID) == "" || strings.TrimSpace(job.InvestigationID) == "" ||
 		strings.TrimSpace(job.SourceID) == "" || strings.TrimSpace(job.RequestHash) == "" ||
 		strings.TrimSpace(job.IdempotencyKey) == "" {
@@ -22,6 +22,9 @@ func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, outboxI
 	}
 	if s.pool == nil {
 		return errors.New("source job creation requires a pool-backed store")
+	}
+	if err := validateOutboxMessage(message, job.ID, 1); err != nil {
+		return fmt.Errorf("validate source job outbox message: %w", err)
 	}
 
 	return s.WithinTransaction(ctx, func(txStore *Store) error {
@@ -37,8 +40,8 @@ func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, outboxI
 		if _, err := txStore.db.Exec(ctx, `
 			insert into outbox_messages (
 				id, message_type, aggregate_type, aggregate_id, payload
-			) values ($1, 'source.collect.requested.v1', 'source_job', $2, $3::jsonb)
-		`, outboxID, job.ID, messagePayloadJSON); err != nil {
+			) values ($1, $2, 'source_job', $3, $4::jsonb)
+		`, message.OutboxID(), message.MessageType(), job.ID, message.JSONPayload()); err != nil {
 			return fmt.Errorf("insert source job outbox message: %w", err)
 		}
 		return nil
@@ -86,14 +89,17 @@ func (s *Store) ScheduleRetry(
 func (s *Store) StartNewAttempt(
 	ctx context.Context,
 	jobID string,
-	outboxID, messagePayloadJSON string,
-) (int, error) {
+	expectedAttemptNo int,
+	message orchestration.OutboxMessage,
+) error {
 	if s.pool == nil {
-		return 0, errors.New("new source job attempt requires a pool-backed store")
+		return errors.New("new source job attempt requires a pool-backed store")
+	}
+	if err := validateOutboxMessage(message, jobID, expectedAttemptNo); err != nil {
+		return fmt.Errorf("validate retry outbox message: %w", err)
 	}
 
-	attemptNo := 0
-	err := s.WithinTransaction(ctx, func(txStore *Store) error {
+	return s.WithinTransaction(ctx, func(txStore *Store) error {
 		var status orchestration.Status
 		var oldAttempt, maxAttempts int
 		if err := txStore.db.QueryRow(ctx, `
@@ -104,22 +110,26 @@ func (s *Store) StartNewAttempt(
 		`, jobID).Scan(&status, &oldAttempt, &maxAttempts); err != nil {
 			return fmt.Errorf("lock source job: %w", err)
 		}
-		if err := orchestration.ValidateAttemptTransition(status, orchestration.StatusPending, oldAttempt, oldAttempt+1); err != nil {
-			return err
-		}
 		if oldAttempt >= maxAttempts {
 			return fmt.Errorf("source job %s has exhausted attempts", jobID)
 		}
-
-		attemptNo = oldAttempt + 1
+		if status != orchestration.StatusRetryWait && status != orchestration.StatusActionRequired {
+			return fmt.Errorf("source job %s cannot start a new attempt from status %s", jobID, status)
+		}
+		if err := orchestration.ValidateAttemptTransition(
+			status, orchestration.StatusPending, oldAttempt, expectedAttemptNo,
+		); err != nil {
+			return err
+		}
 		tag, err := txStore.db.Exec(ctx, `
 			update source_jobs
 			set status = 'pending',
 				attempt_no = $2,
 				next_attempt_at = null,
+				finished_at = null,
 				updated_at = now()
 			where id = $1
-		`, jobID, attemptNo)
+		`, jobID, expectedAttemptNo)
 		if err != nil {
 			return fmt.Errorf("start source job attempt: %w", err)
 		}
@@ -129,13 +139,12 @@ func (s *Store) StartNewAttempt(
 		if _, err := txStore.db.Exec(ctx, `
 			insert into outbox_messages (
 				id, message_type, aggregate_type, aggregate_id, payload
-			) values ($1, 'source.collect.requested.v1', 'source_job', $2, $3::jsonb)
-		`, outboxID, jobID, messagePayloadJSON); err != nil {
+			) values ($1, $2, 'source_job', $3, $4::jsonb)
+		`, message.OutboxID(), message.MessageType(), jobID, message.JSONPayload()); err != nil {
 			return fmt.Errorf("insert retry outbox message: %w", err)
 		}
 		return nil
 	})
-	return attemptNo, err
 }
 
 func (s *Store) AdvanceTerminal(
@@ -152,10 +161,16 @@ func (s *Store) AdvanceTerminal(
 		set status = $2,
 			last_error_code = $3,
 			last_error_message = $4,
-			finished_at = coalesce(finished_at, now()),
+			finished_at = case
+				when $2 = 'action_required' then null
+				else coalesce(finished_at, now())
+			end,
 			updated_at = now()
 		where id = $1
-		  and status in ('pending', 'queued', 'running')
+		  and (
+			(status in ('pending', 'queued', 'running'))
+			or (status = 'action_required' and $2 = 'failed')
+		  )
 	`, jobID, string(status), nullableText(errorCode), nullableText(errorMessage))
 	if err != nil {
 		return fmt.Errorf("advance source job terminal status: %w", err)
@@ -214,36 +229,28 @@ func (s *Store) ApplyResult(
 
 		var status orchestration.Status
 		var attemptNo int
-		var investigationStatus string
+		var investigationID, investigationStatus string
 		if err := txStore.db.QueryRow(ctx, `
-			select job.status, job.attempt_no, investigation.status
-			from source_jobs as job
-			join investigations as investigation on investigation.id = job.investigation_id
-			where job.id = $1
-			for update of job
-		`, receipt.JobID).Scan(&status, &attemptNo, &investigationStatus); err != nil {
+			select status, attempt_no, investigation_id
+			from source_jobs
+			where id = $1
+			for update
+		`, receipt.JobID).Scan(&status, &attemptNo, &investigationID); err != nil {
 			return fmt.Errorf("lock source job result: %w", err)
 		}
-		if receipt.AttemptNo != attemptNo {
-			return txStore.insertIgnoredReceipt(ctx, receipt, "stale_attempt")
+		if err := txStore.db.QueryRow(ctx, `
+			select status
+			from investigations
+			where id = $1
+			for update
+		`, investigationID).Scan(&investigationStatus); err != nil {
+			return fmt.Errorf("lock source job investigation: %w", err)
 		}
-		if orchestration.IsTerminal(status) || investigationStatus != "running" {
-			reason := "terminal_job"
-			if investigationStatus != "running" {
-				reason = "late_cancelled_investigation"
-			}
-			return txStore.insertIgnoredReceipt(ctx, receipt, reason)
-		}
-		if status != orchestration.StatusPending && status != orchestration.StatusQueued &&
-			status != orchestration.StatusRunning {
-			return txStore.insertIgnoredReceipt(ctx, receipt, "job_not_accepting_result")
-		}
-		if !receipt.Applied {
-			reason := receipt.IgnoredReason
-			if strings.TrimSpace(reason) == "" {
-				reason = "not_applied"
-			}
-			return txStore.insertIgnoredReceipt(ctx, receipt, reason)
+		if receipt.AttemptNo > attemptNo {
+			return fmt.Errorf(
+				"source job %s result attempt %d is ahead of current attempt %d",
+				receipt.JobID, receipt.AttemptNo, attemptNo,
+			)
 		}
 
 		var existingDigest string
@@ -263,15 +270,26 @@ func (s *Store) ApplyResult(
 			return fmt.Errorf("read existing source job result: %w", err)
 		}
 
+		if receipt.AttemptNo < attemptNo {
+			return txStore.insertIgnoredReceipt(ctx, receipt, "stale_attempt")
+		}
+		if orchestration.IsTerminal(status) || investigationStatus != "running" {
+			reason := "terminal_job"
+			if investigationStatus != "running" {
+				reason = "late_cancelled_investigation"
+			}
+			return txStore.insertIgnoredReceipt(ctx, receipt, reason)
+		}
+		if status != orchestration.StatusPending && status != orchestration.StatusQueued &&
+			status != orchestration.StatusRunning {
+			return txStore.insertIgnoredReceipt(ctx, receipt, "job_not_accepting_result")
+		}
 		if _, err := txStore.db.Exec(ctx, `
 			insert into source_job_results (
 				id, source_job_id, message_id, attempt_no, result_digest, applied
 			) values ($1, $2, $3, $4, $5, true)
 		`, receipt.ID, receipt.JobID, receipt.MessageID, receipt.AttemptNo, receipt.Digest); err != nil {
 			return fmt.Errorf("insert source job result: %w", err)
-		}
-		if receipt.IgnoredReason != "" {
-			return fmt.Errorf("applied result cannot contain ignored reason")
 		}
 		switch {
 		case receipt.Status == orchestration.StatusRetryWait:
@@ -307,7 +325,6 @@ func (s *Store) insertIgnoredReceipt(ctx context.Context, receipt orchestration.
 			id, source_job_id, message_id, attempt_no,
 			result_digest, applied, ignored_reason
 		) values ($1, $2, $3, $4, $5, false, $6)
-		on conflict (source_job_id, attempt_no) do nothing
 	`, receipt.ID, receipt.JobID, receipt.MessageID, receipt.AttemptNo,
 		receipt.Digest, reason); err != nil {
 		return fmt.Errorf("insert ignored source job result: %w", err)
@@ -321,4 +338,36 @@ func nullableText(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func validateOutboxMessage(
+	message orchestration.OutboxMessage,
+	expectedJobID string,
+	expectedAttemptNo int,
+) error {
+	if message == nil {
+		return errors.New("outbox message is required")
+	}
+	if strings.TrimSpace(message.OutboxID()) == "" {
+		return errors.New("outbox message id is required")
+	}
+	if strings.TrimSpace(message.MessageType()) == "" {
+		return errors.New("outbox message type is required")
+	}
+	if strings.TrimSpace(message.JSONPayload()) == "" {
+		return errors.New("outbox message payload is required")
+	}
+	if message.AggregateID() != expectedJobID {
+		return fmt.Errorf(
+			"outbox aggregate %q does not match source job %q",
+			message.AggregateID(), expectedJobID,
+		)
+	}
+	if message.AttemptNo() != expectedAttemptNo {
+		return fmt.Errorf(
+			"outbox attempt %d does not match source job attempt %d",
+			message.AttemptNo(), expectedAttemptNo,
+		)
+	}
+	return nil
 }

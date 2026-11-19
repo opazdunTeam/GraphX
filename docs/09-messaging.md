@@ -59,7 +59,7 @@ Manifest содержит собственную версию схемы, `job_i
 
 ## Жизненный цикл задания
 
-1. Go в одной транзакции создаёт `source_job` со статусом `pending`, `attempt_no = 1` и outbox message. База разрешает такую вставку только для `running` investigation; повторный запуск и переходы к публикации также проверяют lifecycle investigation под блокировкой.
+1. Go через transport builder `platform/rabbitmq.PrepareSourceCollectRequestedMessage` формирует и полностью проверяет команду по I-JSON и JSON Schema до передачи в PostgreSQL repository. Builder сверяет `message_id`, `job_id` и `attempt_no` с ожидаемой business identity и возвращает тип с закрытыми полями. Затем repository в одной транзакции создаёт `source_job` со статусом `pending`, `attempt_no = 1` и outbox message, повторно сверяя aggregate и attempt с изменяемым job. Repository не интерпретирует JSON payload и отвечает только за его атомарное сохранение с business state. База разрешает такую вставку только для `running` investigation; повторный запуск и переходы к публикации также проверяют lifecycle investigation под блокировкой.
 2. Publisher блокирует порцию outbox-записей, отправляет сообщения и ждёт publisher confirm.
 3. После confirm outbox помечается опубликованным. Job переходит `pending -> queued` только условным обновлением: если consumer уже применил итоговый результат, его состояние не меняется.
 4. Worker получает команду. Отдельное событие начала работы в обязательный контракт MVP не входит.

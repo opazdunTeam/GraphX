@@ -46,7 +46,18 @@ func IsTerminal(status Status) bool {
 	}
 }
 
+func IsKnownStatus(status Status) bool {
+	_, ok := allowedTransitions[status]
+	if ok {
+		return true
+	}
+	return IsTerminal(status)
+}
+
 func CanTransition(from, to Status) bool {
+	if !IsKnownStatus(from) || !IsKnownStatus(to) {
+		return false
+	}
 	if from == to {
 		return true
 	}
