@@ -60,6 +60,11 @@ func run() error {
 	}
 
 	generated := string(actual)
+	specification, err := os.ReadFile(specPath)
+	if err != nil {
+		return fmt.Errorf("read OpenAPI specification: %w", err)
+	}
+	openAPI := string(specification)
 	assertions := map[string]bool{
 		"health operations are excluded": !strings.Contains(generated, "GetLiveness(") &&
 			!strings.Contains(generated, "GetReadiness(") &&
@@ -73,6 +78,9 @@ func run() error {
 			strings.Contains(generated, "EntityLimit *int") &&
 			strings.Contains(generated, "`json:\"depth,omitempty\"`") &&
 			strings.Contains(generated, "`json:\"entity_limit,omitempty\"`"),
+		"dynamic artifact media response is accepted": strings.Contains(openAPI, `"*/*":`) &&
+			strings.Contains(generated, "GetArtifactContent(c *gin.Context") &&
+			strings.Contains(generated, `options.BaseURL+"/artifacts/:artifact_id/content"`),
 	}
 	for name, passed := range assertions {
 		if !passed {

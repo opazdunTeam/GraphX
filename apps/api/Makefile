@@ -7,12 +7,15 @@ OPENAPI_SPEC := ../../contracts/openapi.yaml
 OPENAPI_CONFIG := oapi-codegen.yaml
 OPENAPI_OUTPUT := internal/platform/api/generated/openapi.gen.go
 
-.PHONY: fmt vet build test test-race check check-contracts generate-api check-api test-integration \
+.PHONY: fmt fmt-check vet build test test-race check check-contracts generate-api check-api test-integration \
 	test-db-up test-db-down test-db-logs \
 	migrate-up migrate-down migrate-status migrate-reset-local migrate-image
 
 fmt:
 	gofmt -w ./cmd ./internal
+
+fmt-check:
+	go run ./internal/tools/fmtcheck
 
 vet:
 	go vet ./...
@@ -35,7 +38,7 @@ check-api:
 check-contracts:
 	go run ./internal/tools/contractcheck
 
-check: check-api check-contracts vet build test
+check: fmt-check check-api check-contracts vet build test
 
 test-integration:
 	go run ./internal/tools/integrationtest

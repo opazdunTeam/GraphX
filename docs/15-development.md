@@ -113,3 +113,32 @@ cd ../apps/web
 pnpm check
 pnpm build
 ```
+
+## Обязательный CI
+
+Обычный pull request запускает `.github/workflows/ci.yml`. Jobs `Go`, `Python`, `Web` и `PostgreSQL` независимы и выполняются параллельно; workflow не использует path-фильтры, credentials внешних источников, live source smoke или deployment.
+
+Локальные эквиваленты jobs:
+
+```bash
+cd apps/api
+make check
+make test-race
+
+cd ../../workers
+uv sync --locked
+uv run --locked ruff format --check .
+uv run --locked ruff check .
+uv run --locked mypy
+uv run --locked pytest
+
+cd ../apps/web
+pnpm install --frozen-lockfile
+pnpm check
+pnpm build
+
+cd ../api
+make test-integration
+```
+
+CI до восстановления кеша проверяет наличие `go.sum`, `uv.lock` и `pnpm-lock.yaml`, а после проверок требует отсутствие tracked-изменений и неожиданных untracked-файлов. OpenAPI lint входит в `pnpm check`; Go- и TypeScript-генераторы повторно обрабатывают единый `contracts/openapi.yaml` и проверяют ключевую форму generated-типов. Checks `Go`, `Python`, `Web` и `PostgreSQL` обязательны для `develop` и `main` через GitHub rulesets.

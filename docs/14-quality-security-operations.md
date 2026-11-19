@@ -13,7 +13,11 @@ GraphX - учебный MVP, поэтому не каждая правка тр�
 - ошибочное сопоставление можно отменить;
 - временные интервалы и снимки не смешиваются.
 
-Для обычного pull request достаточно выполнить относящиеся к изменению проверки и кратко описать ручную проверку. Полный набор запускается в CI по мере появления рабочего кода.
+Каждый обычный pull request запускает обязательный GitHub Actions workflow без path-фильтров. Независимые jobs `Go`, `Python`, `Web` и `PostgreSQL` выполняются параллельно и не требуют credentials внешних источников. Они проверяют форматирование, lint, typecheck или build, unit tests, OpenAPI и JSON Schema, актуальность generated-кода и миграции на чистой PostgreSQL 18. Live source smoke и deployment в этот workflow не входят и не блокируют pull request.
+
+CI требует зафиксированные `go.sum`, `uv.lock` и `pnpm-lock.yaml` до восстановления dependency cache. Go запускается с `-mod=readonly`, Python синхронизируется через `uv sync --locked`, а web - через `pnpm install --frozen-lockfile`. Кеш ускоряет загрузку зависимостей, но не заменяет lock-файл и не содержит готовое рабочее дерево. Внешние GitHub Actions закреплены полными commit SHA, права workflow ограничены чтением содержимого репозитория.
+
+Локальные эквиваленты обязательных jobs описаны в [правилах разработки](15-development.md#обязательный-ci). Одноимённые checks включены как обязательные для `develop` и `main` через GitHub rulesets.
 
 ## Наблюдаемость
 
