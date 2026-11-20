@@ -96,6 +96,15 @@ jobs:
         working-directory: workers
         run: uv run --locked pytest
 
+      - name: Test RabbitMQ runtime
+        working-directory: workers
+        run: uv run --locked python tools/integrationtest.py
+
+      - name: Remove RabbitMQ integration environment
+        if: always()
+        working-directory: workers
+        run: docker compose -f docker-compose.test.yaml --profile image-smoke down -v --remove-orphans
+
       - name: Verify clean working tree
         run: |
           git diff --exit-code

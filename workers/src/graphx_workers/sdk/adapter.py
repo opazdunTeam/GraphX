@@ -2,7 +2,9 @@
 
 import logging
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Literal, Protocol, Self
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -93,6 +95,10 @@ class AdapterContext(Protocol):
     rate_limiter: RateLimiter
     logger: logging.Logger
     trace_id: str
+    job_id: UUID
+    attempt_no: int
+    correlation_id: UUID
+    deadline: datetime
     secrets: SecretProvider
     progress: ProgressReporter
 

@@ -1,0 +1,28 @@
+services:
+  rabbitmq-test:
+    image: rabbitmq:4.2.1-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: test_user
+      RABBITMQ_DEFAULT_PASS: test_password
+      RABBITMQ_DEFAULT_VHOST: graphx_test
+    ports:
+      - "5673:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    tmpfs:
+      - /var/lib/rabbitmq
+
+  source-worker-smoke:
+    profiles: ["image-smoke"]
+    build:
+      context: ..
+      dockerfile: workers/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://test_user:test_password@rabbitmq-test:5672/graphx_test
+      LOG_LEVEL: info
+    depends_on:
+      rabbitmq-test:
+        condition: service_healthy
