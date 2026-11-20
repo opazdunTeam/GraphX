@@ -9,6 +9,7 @@ import pytest
 from jsonschema import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
+from graphx_workers.contracts.artifacts import ArtifactReference
 from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.errors import ERROR_CLASSIFICATION, ErrorCode
 from graphx_workers.contracts.messages import (
@@ -207,6 +208,97 @@ def test_schema_boundary_checks_uri_format(registry: ContractSchemaRegistry) -> 
     completed["payload"]["artifacts"][0]["source_uri"] = "not a URI"
     with pytest.raises(SchemaValidationError):
         registry.validate_message(completed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_uri", "https://user:password@example.test/source"),
+        ("source_uri", "https://example.test/source?token=secret"),
+        ("source_uri", "file:///etc/passwd"),
+        ("source_uri", "javascript:alert(1)"),
+        ("source_uri", "https://example.test:99999/source"),
+        ("source_uri", "https://example.test:00080/source"),
+        ("original_filename", " report.json "),
+        ("original_filename", "..."),
+        ("original_filename", "bad\u0085name.json"),
+        ("local_ref", "artifact:bad\u0085ref"),
+    ],
+)
+def test_artifact_security_boundary_rejects_unsafe_transport_values(
+    registry: ContractSchemaRegistry, field: str, value: str
+) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"]["artifacts"][0][field] = value
+    with pytest.raises((SchemaValidationError, ValueError)):
+        registry.validate_message(document)
+    with pytest.raises(ValidationError):
+        parse_source_message(document)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"authorization": "Bearer secret"},
+        {"cookie": "session=secret"},
+        {"etag": "bad\r\nheader"},
+        {"etag": "x" * 513},
+    ],
+)
+def test_artifact_security_boundary_rejects_unsafe_http_metadata(
+    registry: ContractSchemaRegistry, metadata: dict[str, str]
+) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"]["artifacts"][0]["http_metadata"] = metadata
+    with pytest.raises(SchemaValidationError):
+        registry.validate_message(document)
+    with pytest.raises(ValidationError):
+        parse_source_message(document)
+
+
+def test_python_artifact_model_rejects_transport_values_outside_runtime_policy() -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    artifact = document["payload"]["artifacts"][0]
+    artifact["source_uri"] = "https://example.test/source?token=secret"
+    with pytest.raises(ValidationError, match="query parameters"):
+        ArtifactReference.model_validate(artifact)
+
+
+def test_artifact_contract_accepts_bracketed_ipv6_source_uri(
+    registry: ContractSchemaRegistry,
+) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    payload = document["payload"]
+    payload["artifacts"][0]["source_uri"] = "https://[::1]/source/1"
+    payload["digest"] = compute_source_result_digest(payload)
+
+    registry.validate_message(document)
+    message = SourceCollectCompleted.model_validate(document)
+    validate_source_result_semantics(message.payload, payload)
+
+
+def test_artifact_contract_accepts_maximum_source_uri_port(
+    registry: ContractSchemaRegistry,
+) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    payload = document["payload"]
+    payload["artifacts"][0]["source_uri"] = "https://example.test:65535/source/1"
+    payload["digest"] = compute_source_result_digest(payload)
+
+    registry.validate_message(document)
+    message = SourceCollectCompleted.model_validate(document)
+    validate_source_result_semantics(message.payload, payload)
+
+
+def test_typed_boundary_binds_object_key_to_result_attempt() -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    payload = document["payload"]
+    payload["artifacts"][0]["object_key"] = (
+        "artifacts/v1/00000000-0000-4000-8000-000000000099/1/YXJ0aWZhY3Q6cmF3OjE"
+    )
+    payload["digest"] = compute_source_result_digest(payload)
+    with pytest.raises(ValidationError, match="object_key"):
+        SourceCollectCompleted.model_validate(document)
 
 
 @pytest.mark.parametrize(

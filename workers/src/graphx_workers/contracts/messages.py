@@ -116,7 +116,7 @@ class SourceCollectFailedPayload(ContractModel):
 
     @model_validator(mode="after")
     def validate_artifacts(self) -> Self:
-        validate_artifact_refs(self.artifacts)
+        validate_artifact_refs(self.artifacts, job_id=self.job_id, attempt_no=self.attempt_no)
         return self
 
 

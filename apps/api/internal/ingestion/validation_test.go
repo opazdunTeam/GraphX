@@ -227,6 +227,102 @@ func TestSourceResultRejectsDuplicateArtifactsInEveryMode(t *testing.T) {
 	}
 }
 
+func TestArtifactParentReferencesMustResolveWithoutCycles(t *testing.T) {
+	parent := "artifact:parent"
+	child := "artifact:child"
+	valid := []ArtifactReference{
+		{LocalRef: parent},
+		{LocalRef: child, ParentLocalRef: &parent},
+	}
+	if _, err := validateArtifactRefs(valid); err != nil {
+		t.Fatalf("expected valid artifact lineage: %v", err)
+	}
+
+	missing := "artifact:missing"
+	if _, err := validateArtifactRefs([]ArtifactReference{
+		{LocalRef: child, ParentLocalRef: &missing},
+	}); err == nil {
+		t.Fatal("expected missing artifact parent to be rejected")
+	}
+
+	cyclic := []ArtifactReference{
+		{LocalRef: parent, ParentLocalRef: &child},
+		{LocalRef: child, ParentLocalRef: &parent},
+	}
+	if _, err := validateArtifactRefs(cyclic); err == nil {
+		t.Fatal("expected artifact parent cycle to be rejected")
+	}
+}
+
+func TestArtifactTransportBoundaryRejectsUnsafeMetadataAndForeignKeys(t *testing.T) {
+	jobID := "22222222-2222-4222-8222-222222222222"
+	filename := "response.json"
+	base := ArtifactReference{
+		LocalRef:         "artifact:raw:1",
+		ObjectKey:        "artifacts/v1/22222222-2222-4222-8222-222222222222/1/YXJ0aWZhY3Q6cmF3OjE",
+		SourceURI:        "https://example.test/source/1",
+		HTTPMetadata:     map[string]string{"etag": "source-v1"},
+		OriginalFilename: &filename,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ArtifactReference)
+	}{
+		{"foreign key", func(value *ArtifactReference) {
+			value.ObjectKey = "artifacts/v1/00000000-0000-4000-8000-000000000099/1/YXJ0aWZhY3Q6cmF3OjE"
+		}},
+		{"userinfo", func(value *ArtifactReference) {
+			value.SourceURI = "https://user:password@example.test/source"
+		}},
+		{"secret query", func(value *ArtifactReference) {
+			value.SourceURI = "https://example.test/source?token=secret"
+		}},
+		{"file URI", func(value *ArtifactReference) { value.SourceURI = "file:///etc/passwd" }},
+		{"out of range port", func(value *ArtifactReference) {
+			value.SourceURI = "https://example.test:99999/source"
+		}},
+		{"non-canonical port", func(value *ArtifactReference) {
+			value.SourceURI = "https://example.test:00080/source"
+		}},
+		{"authorization", func(value *ArtifactReference) {
+			value.HTTPMetadata = map[string]string{"authorization": "Bearer secret"}
+		}},
+		{"CRLF", func(value *ArtifactReference) {
+			value.HTTPMetadata = map[string]string{"etag": "bad\r\nheader"}
+		}},
+		{"unsafe filename", func(value *ArtifactReference) {
+			unsafe := " response.json "
+			value.OriginalFilename = &unsafe
+		}},
+		{"C1 local ref", func(value *ArtifactReference) {
+			value.LocalRef = "artifact:bad\u0085ref"
+		}},
+		{"C1 filename", func(value *ArtifactReference) {
+			unsafe := "bad\u0085name.json"
+			value.OriginalFilename = &unsafe
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			artifact := base
+			test.mutate(&artifact)
+			if err := ValidateArtifactRefs([]ArtifactReference{artifact}, jobID, 1); err == nil {
+				t.Fatal("expected unsafe artifact transport value to be rejected")
+			}
+		})
+	}
+	ipv6 := base
+	ipv6.SourceURI = "https://[::1]/source/1"
+	if err := ValidateArtifactRefs([]ArtifactReference{ipv6}, jobID, 1); err != nil {
+		t.Fatalf("expected bracketed IPv6 source URI to be valid: %v", err)
+	}
+	maximumPort := base
+	maximumPort.SourceURI = "https://example.test:65535/source/1"
+	if err := ValidateArtifactRefs([]ArtifactReference{maximumPort}, jobID, 1); err != nil {
+		t.Fatalf("expected maximum source URI port to be valid: %v", err)
+	}
+}
+
 func sourceResultPayload(t *testing.T, result *SourceResult) []byte {
 	t.Helper()
 	raw, err := json.Marshal(result)

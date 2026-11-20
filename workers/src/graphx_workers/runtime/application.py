@@ -18,6 +18,7 @@ from graphx_workers.runtime.processor import (
 )
 from graphx_workers.runtime.rabbitmq import SourceRabbitRuntime
 from graphx_workers.runtime.replay import FileTerminalReplayStore
+from graphx_workers.runtime.s3 import build_artifact_store
 from graphx_workers.runtime.terminal import TerminalMessageFactory
 
 
@@ -70,6 +71,18 @@ async def run_forever(settings: WorkerSettings, logger: logging.Logger) -> None:
 
 async def run_source_worker(settings: WorkerSettings, logger: logging.Logger) -> None:
     registry = ContractSchemaRegistry(settings.resolve_contract_schema_root())
+    if settings.s3_endpoint is not None:
+        artifact_store = build_artifact_store(settings)
+        await artifact_store.check_ready()
+        logger.info(
+            "immutable artifact storage ready",
+            extra={
+                "context": {
+                    "object_store_configured": True,
+                    "object_store_requires_versioning": settings.s3_require_versioning,
+                }
+            },
+        )
     replay_store = FileTerminalReplayStore(
         settings.terminal_replay_root,
         retention=settings.terminal_replay_retention,

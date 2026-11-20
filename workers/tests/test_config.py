@@ -2,7 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from pytest import MonkeyPatch
 
 from graphx_workers.config import WorkerKind, WorkerSettings
@@ -43,6 +43,7 @@ def test_source_runtime_settings_are_parsed(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("TERMINAL_REPLAY_MAX_ENTRIES", "123")
     monkeypatch.setenv("TERMINAL_REPLAY_MAX_BYTES", "456789")
     monkeypatch.setenv("TERMINAL_REPLAY_MAX_ENTRY_BYTES", "12345")
+    monkeypatch.setenv("S3_MAX_INFLIGHT_OPERATIONS", "9")
 
     settings = WorkerSettings()
 
@@ -57,6 +58,7 @@ def test_source_runtime_settings_are_parsed(monkeypatch: MonkeyPatch) -> None:
     assert settings.terminal_replay_max_entries == 123
     assert settings.terminal_replay_max_bytes == 456789
     assert settings.terminal_replay_max_entry_bytes == 12345
+    assert settings.s3_max_inflight_operations == 9
 
 
 def test_source_runtime_requires_non_empty_rabbitmq_url() -> None:
@@ -78,3 +80,53 @@ def test_settings_reject_unsafe_replay_policy() -> None:
 
     with pytest.raises(ValidationError, match="at least 4096"):
         WorkerSettings(terminal_replay_max_entry_bytes=4095)
+
+
+def test_object_store_capacity_covers_worker_concurrency() -> None:
+    complete_store = {
+        "s3_endpoint": "http://minio.test:9000",
+        "s3_bucket_artifacts": "artifacts",
+        "s3_access_key": "access",
+        "s3_secret_key": "secret",
+    }
+
+    with pytest.raises(ValidationError, match="cannot be lower than WORKER_CONCURRENCY"):
+        WorkerSettings.model_validate(
+            complete_store
+            | {
+                "worker_concurrency": 5,
+                "s3_max_inflight_operations": 4,
+            }
+        )
+
+    settings = WorkerSettings.model_validate(
+        complete_store
+        | {
+            "worker_concurrency": 4,
+            "s3_max_inflight_operations": 4,
+        }
+    )
+    assert settings.s3_max_inflight_operations == settings.worker_concurrency
+
+
+def test_object_storage_configuration_is_complete_and_never_allows_overwrite() -> None:
+    with pytest.raises(ValidationError, match="configured together"):
+        WorkerSettings(s3_endpoint="http://minio:9000")
+    with pytest.raises(ValidationError, match="must remain false"):
+        WorkerSettings(s3_allow_overwrite=True)
+
+    settings = WorkerSettings(
+        s3_endpoint="http://minio:9000",
+        s3_bucket_artifacts="artifacts",
+        s3_access_key=SecretStr("access"),
+        s3_secret_key=SecretStr("secret"),
+        s3_require_versioning=True,
+    )
+    assert settings.require_object_store() == (
+        "http://minio:9000",
+        "artifacts",
+        "access",
+        "secret",
+    )
+    assert settings.safe_summary()["object_store_requires_versioning"] is True
+    assert "secret" not in str(settings.safe_summary())

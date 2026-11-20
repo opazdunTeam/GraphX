@@ -2,12 +2,17 @@ package ingestion
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/contractjson"
 )
@@ -24,9 +29,19 @@ func ValidateSourceResult(result SourceResult, rawPayload []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := validateArtifactTransport(result.Artifacts, result.JobID, result.AttemptNo); err != nil {
+		return err
+	}
 	if result.Manifest != nil {
 		if _, exists := artifactRefs[result.Manifest.LocalRef]; exists {
 			return errors.New("manifest and source artifact local_ref values must be unique")
+		}
+		allArtifacts := append(append([]ArtifactReference{}, result.Artifacts...), *result.Manifest)
+		if _, err := validateArtifactRefs(allArtifacts); err != nil {
+			return err
+		}
+		if err := validateArtifactTransport(allArtifacts, result.JobID, result.AttemptNo); err != nil {
+			return err
 		}
 	}
 	if result.Manifest == nil {
@@ -182,13 +197,86 @@ func validateArtifactRefs(artifacts []ArtifactReference) (map[string]struct{}, e
 		}
 		refs[artifact.LocalRef] = struct{}{}
 	}
+	parents := make(map[string]string)
+	for _, artifact := range artifacts {
+		if artifact.ParentLocalRef == nil {
+			continue
+		}
+		if _, exists := refs[*artifact.ParentLocalRef]; !exists {
+			return nil, fmt.Errorf("artifact %q references unknown parent %q", artifact.LocalRef, *artifact.ParentLocalRef)
+		}
+		if artifact.LocalRef == *artifact.ParentLocalRef {
+			return nil, fmt.Errorf("artifact %q cannot be its own parent", artifact.LocalRef)
+		}
+		parents[artifact.LocalRef] = *artifact.ParentLocalRef
+	}
+	for localRef := range parents {
+		visited := map[string]struct{}{localRef: {}}
+		current, exists := parents[localRef]
+		for exists {
+			if _, duplicate := visited[current]; duplicate {
+				return nil, errors.New("artifact parent references cannot contain a cycle")
+			}
+			visited[current] = struct{}{}
+			current, exists = parents[current]
+		}
+	}
 	return refs, nil
 }
 
-// ValidateUniqueArtifactRefs enforces result-scoped artifact identities for completed and failed results.
-func ValidateUniqueArtifactRefs(artifacts []ArtifactReference) error {
-	_, err := validateArtifactRefs(artifacts)
-	return err
+func validateArtifactTransport(artifacts []ArtifactReference, jobID string, attemptNo int) error {
+	allowedMetadata := map[string]struct{}{
+		"etag": {}, "last-modified": {}, "content-language": {},
+	}
+	for _, artifact := range artifacts {
+		if utf8.RuneCountInString(artifact.LocalRef) > 200 ||
+			strings.IndexFunc(artifact.LocalRef, unicode.IsControl) >= 0 {
+			return fmt.Errorf("artifact %q has an invalid local_ref", artifact.LocalRef)
+		}
+		encodedRef := base64.RawURLEncoding.EncodeToString([]byte(artifact.LocalRef))
+		expectedKey := fmt.Sprintf("artifacts/v1/%s/%d/%s", jobID, attemptNo, encodedRef)
+		if artifact.ObjectKey != expectedKey || len(artifact.ObjectKey) > 1024 {
+			return fmt.Errorf("artifact %q has an invalid object_key", artifact.LocalRef)
+		}
+		parsed, err := url.Parse(artifact.SourceURI)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" ||
+			parsed.Fragment != "" || utf8.RuneCountInString(artifact.SourceURI) > 2048 {
+			return fmt.Errorf("artifact %q has an unsafe source_uri", artifact.LocalRef)
+		}
+		if portText := parsed.Port(); portText != "" {
+			port, portErr := strconv.Atoi(portText)
+			if portErr != nil || port < 1 || port > 65535 || portText != strconv.Itoa(port) {
+				return fmt.Errorf("artifact %q has an unsafe source_uri port", artifact.LocalRef)
+			}
+		}
+		for name, value := range artifact.HTTPMetadata {
+			if _, allowed := allowedMetadata[name]; !allowed || value == "" ||
+				utf8.RuneCountInString(value) > 512 || strings.ContainsAny(value, "\r\n") {
+				return fmt.Errorf("artifact %q has unsafe HTTP metadata", artifact.LocalRef)
+			}
+		}
+		if artifact.OriginalFilename != nil {
+			filename := *artifact.OriginalFilename
+			if filename != strings.Trim(filename, " .") || filename == "" ||
+				utf8.RuneCountInString(filename) > 255 || strings.ContainsAny(filename, "/\\") ||
+				strings.IndexFunc(filename, unicode.IsControl) >= 0 {
+				return fmt.Errorf("artifact %q has an unsafe original_filename", artifact.LocalRef)
+			}
+		}
+	}
+	return nil
+}
+
+func ValidateArtifactRefs(
+	artifacts []ArtifactReference,
+	jobID string,
+	attemptNo int,
+) error {
+	if _, err := validateArtifactRefs(artifacts); err != nil {
+		return err
+	}
+	return validateArtifactTransport(artifacts, jobID, attemptNo)
 }
 
 func latestPossibleDate(anchor time.Time, precision string) time.Time {

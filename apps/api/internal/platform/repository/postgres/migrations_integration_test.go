@@ -423,6 +423,57 @@ func TestArtifactSourceMustMatchImmutableJobSource(t *testing.T) {
 	})
 }
 
+func TestArtifactLineageIsImmutableAndRequiresTheSameSource(t *testing.T) {
+	withMigrationTx(t, func(ctx context.Context, tx pgx.Tx) {
+		seedIngestionChain(t, ctx, tx)
+		const childArtifactID = "40000000-0000-4000-8000-000000000002"
+		if _, err := tx.Exec(ctx, `
+			insert into artifacts (
+				id, source_id, kind, media_type, object_key, sha256, byte_size,
+				retrieved_at, adapter_version, original_filename, parent_artifact_id
+			) values (
+				$1, $2, 'document', 'application/pdf', 'migration-test/child.pdf', $3, 1,
+				now(), 'fixture/1', 'safe.pdf', $4
+			)
+		`, childArtifactID, testSourceID, strings.Repeat("d", 64), testArtifactID); err != nil {
+			t.Fatalf("insert child artifact: %v", err)
+		}
+		requireRejectedStatement(t, ctx, tx, "rewrite artifact parent", `
+			update artifacts set parent_artifact_id = null where id = $1
+		`, childArtifactID)
+		for _, filename := range []string{" ", "...", " report.pdf", "report.pdf ", "bad/name", "bad\\name", "bad\x7fname", "bad\u0085name"} {
+			requireRejectedStatement(t, ctx, tx, "unsafe original filename", `
+				insert into artifacts (
+					id, source_id, kind, media_type, object_key, sha256, byte_size,
+					retrieved_at, adapter_version, original_filename
+				) values (
+					'40000000-0000-4000-8000-000000000099', $1, 'document',
+					'application/pdf', 'migration-test/unsafe.pdf', $2, 1,
+					now(), 'fixture/1', $3
+				)
+			`, testSourceID, strings.Repeat("f", 64), filename)
+		}
+
+		const otherSourceID = "00000000-0000-4000-8000-000000000002"
+		if _, err := tx.Exec(ctx, `
+			insert into sources (id, code, name, mode)
+			values ($1, 'lineage-other', 'Lineage Other', 'manual')
+		`, otherSourceID); err != nil {
+			t.Fatalf("insert other source: %v", err)
+		}
+		requireRejectedStatement(t, ctx, tx, "cross-source artifact parent", `
+			insert into artifacts (
+				id, source_id, kind, media_type, object_key, sha256, byte_size,
+				retrieved_at, adapter_version, parent_artifact_id
+			) values (
+				'40000000-0000-4000-8000-000000000003', $1, 'document',
+				'application/pdf', 'migration-test/cross-source.pdf', $2, 1,
+				now(), 'other/1', $3
+			)
+		`, otherSourceID, strings.Repeat("e", 64), testArtifactID)
+	})
+}
+
 func TestLateCancelledResultKeepsReceiptAndArtifactsOnly(t *testing.T) {
 	withMigrationTx(t, func(ctx context.Context, tx pgx.Tx) {
 		seedJob(t, ctx, tx)

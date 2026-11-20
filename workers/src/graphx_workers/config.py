@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,7 +45,24 @@ class WorkerSettings(BaseSettings):
     terminal_replay_max_bytes: PositiveInt = 10 * 1024 * 1024 * 1024
     terminal_replay_max_entry_bytes: PositiveInt = 2 * 1024 * 1024
     s3_endpoint: str | None = None
+    s3_region: str = "local"
     s3_bucket_artifacts: str | None = None
+    s3_access_key: SecretStr | None = None
+    s3_secret_key: SecretStr | None = None
+    s3_use_path_style: bool = True
+    s3_allow_overwrite: bool = False
+    s3_require_versioning: bool = False
+    s3_connect_timeout: timedelta = Field(default=timedelta(seconds=10))
+    s3_read_timeout: timedelta = Field(default=timedelta(seconds=30))
+    s3_reconciliation_timeout: timedelta = Field(default=timedelta(seconds=3))
+    s3_max_inflight_operations: PositiveInt = 16
+    artifact_max_bytes: PositiveInt = 100 * 1024 * 1024
+    artifact_spool_max_memory_bytes: PositiveInt = 1024 * 1024
+    artifact_spool_directory: Path | None = None
+    artifact_allowed_media_types: str = (
+        "application/json,application/pdf,application/xml,application/zip,"
+        "text/csv,text/html,text/plain,text/xml,image/jpeg,image/png,image/webp"
+    )
 
     @field_validator(
         "worker_heartbeat_interval",
@@ -53,6 +70,9 @@ class WorkerSettings(BaseSettings):
         "worker_shutdown_timeout",
         "rabbitmq_connect_timeout",
         "rabbitmq_publish_timeout",
+        "s3_connect_timeout",
+        "s3_read_timeout",
+        "s3_reconciliation_timeout",
         "terminal_replay_retention",
         "terminal_replay_cleanup_interval",
         mode="before",
@@ -85,6 +105,7 @@ class WorkerSettings(BaseSettings):
             "playwright_enabled": self.playwright_enabled,
             "rabbitmq_configured": self.rabbitmq_url is not None,
             "object_store_configured": all((self.s3_endpoint, self.s3_bucket_artifacts)),
+            "object_store_requires_versioning": self.s3_require_versioning,
         }
 
     @model_validator(mode="after")
@@ -97,7 +118,64 @@ class WorkerSettings(BaseSettings):
             )
         if self.terminal_replay_max_entry_bytes < 4096:
             raise ValueError("TERMINAL_REPLAY_MAX_ENTRY_BYTES must be at least 4096 bytes")
+        if self.s3_allow_overwrite:
+            raise ValueError("S3_ALLOW_OVERWRITE must remain false for immutable artifacts")
+        configured = (
+            self.s3_endpoint,
+            self.s3_bucket_artifacts,
+            self.s3_access_key,
+            self.s3_secret_key,
+        )
+        if any(value is not None for value in configured) and not all(
+            value is not None for value in configured
+        ):
+            raise ValueError(
+                "S3_ENDPOINT, S3_BUCKET_ARTIFACTS, S3_ACCESS_KEY and S3_SECRET_KEY "
+                "must be configured together"
+            )
+        if all(value is not None for value in configured):
+            endpoint, bucket, access_key, secret_key = configured
+            assert isinstance(endpoint, str)
+            assert isinstance(bucket, str)
+            assert isinstance(access_key, SecretStr)
+            assert isinstance(secret_key, SecretStr)
+            if not endpoint.strip() or not bucket.strip() or not self.s3_region.strip():
+                raise ValueError("S3 endpoint, bucket and region must be non-empty")
+            if not access_key.get_secret_value() or not secret_key.get_secret_value():
+                raise ValueError("S3 credentials must be non-empty")
+            if self.s3_max_inflight_operations < self.worker_concurrency:
+                raise ValueError(
+                    "S3_MAX_INFLIGHT_OPERATIONS cannot be lower than WORKER_CONCURRENCY"
+                )
+        if self.artifact_spool_max_memory_bytes > self.artifact_max_bytes:
+            raise ValueError("ARTIFACT_SPOOL_MAX_MEMORY_BYTES cannot exceed ARTIFACT_MAX_BYTES")
+        if self.artifact_max_bytes > 5 * 1024 * 1024 * 1024:
+            raise ValueError("ARTIFACT_MAX_BYTES cannot exceed the S3 PutObject limit")
+        if not self.allowed_artifact_media_types():
+            raise ValueError("ARTIFACT_ALLOWED_MEDIA_TYPES must not be empty")
         return self
+
+    def allowed_artifact_media_types(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().lower()
+            for value in self.artifact_allowed_media_types.split(",")
+            if value.strip()
+        )
+
+    def require_object_store(self) -> tuple[str, str, str, str]:
+        if (
+            self.s3_endpoint is None
+            or self.s3_bucket_artifacts is None
+            or self.s3_access_key is None
+            or self.s3_secret_key is None
+        ):
+            raise ValueError("complete S3 configuration is required for artifact storage")
+        return (
+            self.s3_endpoint,
+            self.s3_bucket_artifacts,
+            self.s3_access_key.get_secret_value(),
+            self.s3_secret_key.get_secret_value(),
+        )
 
     def require_rabbitmq_url(self) -> str:
         if self.rabbitmq_url is None or not self.rabbitmq_url.strip():

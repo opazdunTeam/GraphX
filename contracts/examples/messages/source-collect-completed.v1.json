@@ -16,12 +16,12 @@
     "parser_version": "fixture-parser/1.0.0",
     "mapping_version": "fixture-mapper/1.0.0",
     "normalization_version": "graphx-normalization/1.0.0",
-    "digest": "91fabdeae3ef6f1c5f831def17f5f8ec9f3a9c17107106b3de7ca7e10ea02571",
+    "digest": "3ff74cd044d7e41986a879c58c1e09ad7b40519aecf10663293aae9f3b525657",
     "artifacts": [
       {
         "local_ref": "artifact:raw:1",
         "kind": "raw_response",
-        "object_key": "fixture/2026/11/02/response.json",
+        "object_key": "artifacts/v1/22222222-2222-4222-8222-222222222222/1/YXJ0aWZhY3Q6cmF3OjE",
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "media_type": "application/json",
         "byte_size": 128,
@@ -29,7 +29,7 @@
         "retrieved_at": "2026-11-02T12:00:03Z",
         "published_at": null,
         "http_metadata": {
-          "content-type": "application/json"
+          "etag": "fixture-response-v1"
         }
       }
     ],

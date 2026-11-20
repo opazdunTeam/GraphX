@@ -51,6 +51,8 @@ contracts/
 
 Это полный набор межкомпонентных JSON Schema для MVP.
 
+Artifact reference может содержать `original_filename` и `parent_local_ref`. Оба поля optional для совместимости v1; parent разрешается внутри результата и не может образовывать self-reference или цикл. Внутренний object key остаётся обязательным transport-полем между worker и Go, проверяется как `artifacts/v1/{job_id}/{attempt_no}/{base64url(local_ref)}` и не выдаётся web-клиенту. `source_uri` является каноническим HTTP(S) адресом без userinfo, query и fragment; HTTP metadata ограничена полями `etag`, `last-modified`, `content-language`.
+
 ## Как читать контракты
 
 Все JSON Schema используют стандарт редакции Draft 2020-12. Поле `type` определяет вид сообщения, а `schema_version` - версию его конверта. Несовместимое изменение получает новый суффикс в `type` и отдельный файл, например `source.collect.requested.v2`.

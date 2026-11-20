@@ -16,7 +16,7 @@ from aio_pika.abc import (
 )
 from pydantic import AnyUrl
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.messages import (
     CollectLimits,
     SourceCollectRequested,
@@ -96,7 +96,7 @@ class FakeAdapter:
     async def collect(
         self, request: CollectRequest, context: RuntimeAdapterContext
     ) -> CollectResult:
-        del request, context
+        del request
         self.calls += 1
         self.started.set()
         try:
@@ -122,7 +122,9 @@ class FakeAdapter:
                 ArtifactReference(
                     local_ref="artifact:raw:1",
                     kind="raw_response",
-                    object_key="fixture/response.json",
+                    object_key=artifact_object_key(
+                        context.job_id, context.attempt_no, "artifact:raw:1"
+                    ),
                     sha256="a" * 64,
                     media_type="application/json",
                     byte_size=2,

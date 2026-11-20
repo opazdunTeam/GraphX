@@ -15,6 +15,7 @@ from aio_pika.abc import (
     AbstractRobustConnection,
 )
 
+from graphx_workers.runtime.errors import RuntimeCapacityError, RuntimeFatalError
 from graphx_workers.runtime.processor import InvalidCommandError, SourceCommandProcessor
 from graphx_workers.runtime.replay import ReplayStoreCapacityError
 from graphx_workers.runtime.terminal import PreparedTerminalMessage
@@ -68,12 +69,12 @@ class SourceDeliveryHandler:
         processor: SourceCommandProcessor,
         publisher: ResultPublisher,
         logger: logging.Logger,
-        on_capacity_exhausted: Callable[[ReplayStoreCapacityError], None] | None = None,
+        on_fatal_error: Callable[[RuntimeFatalError], None] | None = None,
     ) -> None:
         self._processor = processor
         self._publisher = publisher
         self._logger = logger
-        self._on_capacity_exhausted = on_capacity_exhausted
+        self._on_fatal_error = on_fatal_error
 
     async def handle(self, delivery: IncomingDelivery) -> None:
         try:
@@ -82,20 +83,22 @@ class SourceDeliveryHandler:
             self._logger.warning("rejecting invalid source command")
             await delivery.reject(requeue=False)
             return
-        except ReplayStoreCapacityError as error:
+        except RuntimeFatalError as error:
+            context: dict[str, object] = {"error_code": "RUNTIME_FATAL_ERROR"}
+            if isinstance(error, ReplayStoreCapacityError):
+                context.update(
+                    error_code="REPLAY_CAPACITY_EXHAUSTED",
+                    replay_entries=error.entries,
+                    replay_bytes=error.bytes_used,
+                )
+            elif isinstance(error, RuntimeCapacityError):
+                context["error_code"] = "RUNTIME_CAPACITY_EXHAUSTED"
             self._logger.critical(
-                "terminal replay capacity is exhausted; stopping consumer",
-                extra={
-                    "context": {
-                        "error_code": "REPLAY_CAPACITY_EXHAUSTED",
-                        "replay_entries": error.entries,
-                        "replay_bytes": error.bytes_used,
-                    }
-                },
+                "runtime cannot continue safely; stopping consumer", extra={"context": context}
             )
             await self._nack_if_possible(delivery)
-            if self._on_capacity_exhausted is not None:
-                self._on_capacity_exhausted(error)
+            if self._on_fatal_error is not None:
+                self._on_fatal_error(error)
             return
         except asyncio.CancelledError:
             raise
@@ -240,7 +243,7 @@ class SourceRabbitRuntime:
         )
         self._consumer_tag = await self._queue.consume(self._consume, no_ack=False)
 
-    def _stop_for_capacity(self, error: ReplayStoreCapacityError) -> None:
+    def _stop_for_capacity(self, error: RuntimeFatalError) -> None:
         if self._fatal_error is None:
             self._fatal_error = error
             self._ready.clear()

@@ -9,7 +9,7 @@ from uuid import UUID
 import rfc8785
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.records import SourceRecord
 
@@ -34,6 +34,11 @@ class SourceResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_schema_rules(self) -> Self:
+        validate_artifact_refs(
+            [*self.artifacts, *([self.manifest] if self.manifest is not None else [])],
+            job_id=self.job_id,
+            attempt_no=self.attempt_no,
+        )
         if self.manifest is not None:
             if self.manifest.kind != "manifest" or self.manifest.media_type != "application/json":
                 raise ValueError("manifest must be a JSON manifest artifact")
@@ -96,11 +101,38 @@ def validate_result_content(
             raise ValueError(f"{claim.claim_kind} claim requires a meaningful value")
 
 
-def validate_artifact_refs(artifacts: list[ArtifactReference]) -> set[str]:
+def validate_artifact_refs(
+    artifacts: list[ArtifactReference],
+    *,
+    job_id: UUID | None = None,
+    attempt_no: int | None = None,
+) -> set[str]:
     artifact_refs = [artifact.local_ref for artifact in artifacts]
     if len(artifact_refs) != len(set(artifact_refs)):
         raise ValueError("artifact local_ref values must be unique")
-    return set(artifact_refs)
+    known = set(artifact_refs)
+    if job_id is not None and attempt_no is not None:
+        for artifact in artifacts:
+            if artifact.object_key != artifact_object_key(job_id, attempt_no, artifact.local_ref):
+                raise ValueError("artifact object_key does not match job, attempt and local_ref")
+    parents = {
+        artifact.local_ref: artifact.parent_local_ref
+        for artifact in artifacts
+        if artifact.parent_local_ref is not None
+    }
+    for local_ref, parent_local_ref in parents.items():
+        if parent_local_ref not in known:
+            raise ValueError("artifact parent_local_ref must resolve to an artifact")
+        if parent_local_ref == local_ref:
+            raise ValueError("artifact cannot be its own parent")
+        visited = {local_ref}
+        current: str | None = parent_local_ref
+        while current is not None:
+            if current in visited:
+                raise ValueError("artifact parent references cannot contain a cycle")
+            visited.add(current)
+            current = parents.get(current)
+    return known
 
 
 def compute_source_result_digest(result: SourceResult | Mapping[str, Any]) -> str:
@@ -122,9 +154,17 @@ def validate_source_result_semantics(
         digest_payload = result if raw_payload is None else raw_payload
     if compute_source_result_digest(digest_payload) != result.digest:
         raise ValueError("source result digest does not match RFC 8785 canonical payload")
-    artifact_refs = validate_artifact_refs(result.artifacts)
-    if result.manifest is not None and result.manifest.local_ref in artifact_refs:
-        raise ValueError("manifest and source artifact local_ref values must be unique")
+    artifact_refs = validate_artifact_refs(
+        result.artifacts, job_id=result.job_id, attempt_no=result.attempt_no
+    )
+    if result.manifest is not None:
+        if result.manifest.local_ref in artifact_refs:
+            raise ValueError("manifest and source artifact local_ref values must be unique")
+        validate_artifact_refs(
+            [*result.artifacts, result.manifest],
+            job_id=result.job_id,
+            attempt_no=result.attempt_no,
+        )
     if result.manifest is None:
         if result.record_count != len(result.records):
             raise ValueError("inline record_count must equal the number of records")

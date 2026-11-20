@@ -1,11 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import AnyUrl, ValidationError
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.errors import ERROR_CLASSIFICATION, ErrorClassification, ErrorCode
 from graphx_workers.contracts.messages import (
@@ -27,12 +27,16 @@ from graphx_workers.runtime.results import (
 )
 from graphx_workers.sdk import CollectRequest, CollectResult
 
+JOB_ID = UUID("22222222-2222-4222-8222-222222222222")
 
-def source_artifact() -> ArtifactReference:
+
+def source_artifact(
+    job_id: UUID = JOB_ID, *, local_ref: str = "artifact:raw:1"
+) -> ArtifactReference:
     return ArtifactReference(
-        local_ref="artifact:raw:1",
+        local_ref=local_ref,
         kind="raw_response",
-        object_key="fixture/response.json",
+        object_key=artifact_object_key(job_id, 1, local_ref),
         sha256="a" * 64,
         media_type="application/json",
         byte_size=2,
@@ -43,14 +47,14 @@ def source_artifact() -> ArtifactReference:
     )
 
 
-def collected_result() -> CollectResult:
+def collected_result(job_id: UUID = JOB_ID) -> CollectResult:
     return CollectResult(
         outcome="succeeded",
         adapter_version="fixture-adapter/1",
         parser_version="fixture-parser/1",
         mapping_version="fixture-mapper/1",
         normalization_version="normalization/1",
-        artifacts=[source_artifact()],
+        artifacts=[source_artifact(job_id)],
         records=[
             SourceRecord(
                 local_ref="person:1",
@@ -123,7 +127,7 @@ def test_error_catalog_is_shared_with_transport_model() -> None:
 
 def test_runtime_builds_valid_inline_result_and_digest() -> None:
     collected = collected_result()
-    result = build_inline_source_result(uuid4(), 1, collected)
+    result = build_inline_source_result(JOB_ID, 1, collected)
     validate_source_result_semantics(result)
     assert result.record_count == 1
     assert result.manifest is None
@@ -137,17 +141,30 @@ def test_inline_finalization_revalidates_mutated_collection() -> None:
     collected.artifacts.append(collected.artifacts[0].model_copy(deep=True))
 
     with pytest.raises(ValueError, match="artifact local_ref values must be unique"):
-        build_inline_source_result(uuid4(), 1, collected)
+        build_inline_source_result(JOB_ID, 1, collected)
+
+
+def test_artifact_parent_references_are_resolved_and_acyclic() -> None:
+    child = source_artifact(local_ref="artifact:child").model_copy(
+        update={"parent_local_ref": "artifact:raw:1"}
+    )
+    collected = collected_result().model_copy(update={"artifacts": [source_artifact(), child]})
+    build_inline_source_result(JOB_ID, 1, collected)
+
+    cyclic_parent = source_artifact().model_copy(update={"parent_local_ref": "artifact:child"})
+    cyclic_child = child.model_copy(update={"parent_local_ref": "artifact:raw:1"})
+    with pytest.raises(ValueError, match="cycle"):
+        CollectResult(**{**collected.model_dump(), "artifacts": [cyclic_parent, cyclic_child]})
 
 
 def test_runtime_owns_manifest_serialization_and_finalization() -> None:
     job_id = uuid4()
-    collected = collected_result()
+    collected = collected_result(job_id)
     prepared = prepare_manifest(job_id, 1, collected)
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
-        object_key="fixture/result-manifest.json",
+        object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
         sha256=sha256(prepared.content).hexdigest(),
         media_type="application/json",
         byte_size=len(prepared.content),
@@ -166,12 +183,12 @@ def test_runtime_owns_manifest_serialization_and_finalization() -> None:
 
 def test_manifest_finalization_rejects_a_different_collection_with_same_count() -> None:
     job_id = uuid4()
-    original = collected_result()
+    original = collected_result(job_id)
     prepared = prepare_manifest(job_id, 1, original)
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
-        object_key="fixture/result-manifest.json",
+        object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
         sha256=sha256(prepared.content).hexdigest(),
         media_type="application/json",
         byte_size=len(prepared.content),

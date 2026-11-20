@@ -19,6 +19,7 @@ from graphx_workers.contracts.messages import (
 )
 from graphx_workers.contracts.results import SourceResult
 from graphx_workers.contracts.schema import ContractSchemaRegistry
+from graphx_workers.runtime.errors import RuntimeInfrastructureUncertainError
 from graphx_workers.runtime.replay import (
     ReplayEntryTooLargeError,
     StoredTerminalMessage,
@@ -201,7 +202,7 @@ class SourceCommandProcessor:
                 task.cancel()
             async with self._lock:
                 for message_id, entry in tuple(self._inflight.items()):
-                    if entry[1] in tasks:
+                    if entry[1] in tasks and entry[1].done():
                         self._inflight.pop(message_id, None)
 
     def _parse_command(self, raw: bytes) -> SourceCollectRequested:
@@ -284,6 +285,10 @@ class SourceCommandProcessor:
                 adapter_version=registration.version,
                 artifacts=artifacts,
             )
+        except RuntimeInfrastructureUncertainError:
+            # A PUT may have committed even though its result is not observable yet.
+            # Publishing a terminal receipt here could orphan immutable evidence.
+            raise
         except Exception:
             self._logger.exception(
                 "source adapter failed unexpectedly",

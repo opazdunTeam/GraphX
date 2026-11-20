@@ -285,6 +285,30 @@ func run() error {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
 		return fmt.Errorf("verify entity resolution schema boundary: %w", err)
 	}
+	if err := executeGoose("up-to", "7"); err != nil {
+		_ = execute("docker", append(composeArgs, "down", "-v")...)
+		return fmt.Errorf("apply artifact lineage boundary: %w", err)
+	}
+	if err := executePSQL(`
+		do $$
+		begin
+			if not exists (
+				select 1 from information_schema.columns
+				where table_schema = 'public' and table_name = 'artifacts'
+					and column_name = 'parent_artifact_id'
+			) or not exists (
+				select 1 from information_schema.columns
+				where table_schema = 'public' and table_name = 'artifacts'
+					and column_name = 'original_filename'
+			) then
+				raise exception 'version 7 artifact lineage boundary is invalid';
+			end if;
+		end
+		$$
+	`); err != nil {
+		_ = execute("docker", append(composeArgs, "down", "-v")...)
+		return fmt.Errorf("verify artifact lineage schema boundary: %w", err)
+	}
 
 	testCommand := exec.Command(
 		"go",

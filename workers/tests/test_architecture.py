@@ -2,7 +2,16 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "graphx_workers"
-FORBIDDEN_INFRASTRUCTURE = {"aio_pika", "aiormq", "asyncpg", "pika", "psycopg"}
+FORBIDDEN_INFRASTRUCTURE = {
+    "aio_pika",
+    "aiormq",
+    "asyncpg",
+    "boto3",
+    "botocore",
+    "minio",
+    "pika",
+    "psycopg",
+}
 
 
 def test_sdk_and_source_adapters_do_not_import_transport_or_database_clients() -> None:

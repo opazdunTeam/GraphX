@@ -1,4 +1,20 @@
 services:
+  minio-test:
+    image: ifirestone/minio:RELEASE.2026-09-22T19-25-18Z@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: test_access
+      MINIO_ROOT_PASSWORD: test_secret_password
+    ports:
+      - "9002:9000"
+    healthcheck:
+      test: ["CMD", "minio", "--version"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    tmpfs:
+      - /data
+
   rabbitmq-test:
     image: rabbitmq:4.2.1-management-alpine
     environment:
@@ -13,7 +29,7 @@ services:
       timeout: 5s
       retries: 30
     tmpfs:
-      - /var/lib/rabbitmq
+      - /var/lib/rabbitmq/mnesia
 
   source-worker-smoke:
     profiles: ["image-smoke"]
@@ -23,6 +39,14 @@ services:
     environment:
       RABBITMQ_URL: amqp://test_user:test_password@rabbitmq-test:5672/graphx_test
       LOG_LEVEL: info
+      S3_ENDPOINT: http://minio-test:9000
+      S3_REGION: local
+      S3_BUCKET_ARTIFACTS: graphx-smoke-artifacts
+      S3_ACCESS_KEY: test_access
+      S3_SECRET_KEY: test_secret_password
+      S3_USE_PATH_STYLE: "true"
     depends_on:
       rabbitmq-test:
+        condition: service_healthy
+      minio-test:
         condition: service_healthy

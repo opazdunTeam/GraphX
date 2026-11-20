@@ -3,16 +3,18 @@ package ingestion
 import "time"
 
 type ArtifactReference struct {
-	LocalRef     string            `json:"local_ref"`
-	Kind         string            `json:"kind"`
-	ObjectKey    string            `json:"object_key"`
-	SHA256       string            `json:"sha256"`
-	MediaType    string            `json:"media_type"`
-	ByteSize     int64             `json:"byte_size"`
-	SourceURI    string            `json:"source_uri"`
-	RetrievedAt  time.Time         `json:"retrieved_at"`
-	PublishedAt  *time.Time        `json:"published_at"`
-	HTTPMetadata map[string]string `json:"http_metadata"`
+	LocalRef         string            `json:"local_ref"`
+	Kind             string            `json:"kind"`
+	ObjectKey        string            `json:"object_key"`
+	SHA256           string            `json:"sha256"`
+	MediaType        string            `json:"media_type"`
+	ByteSize         int64             `json:"byte_size"`
+	SourceURI        string            `json:"source_uri"`
+	RetrievedAt      time.Time         `json:"retrieved_at"`
+	PublishedAt      *time.Time        `json:"published_at"`
+	HTTPMetadata     map[string]string `json:"http_metadata"`
+	OriginalFilename *string           `json:"original_filename,omitempty"`
+	ParentLocalRef   *string           `json:"parent_local_ref,omitempty"`
 }
 
 type Claim struct {

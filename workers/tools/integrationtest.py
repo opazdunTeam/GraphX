@@ -9,6 +9,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "docker-compose.test.yaml"
 TEST_URL = "amqp://test_user:test_password@127.0.0.1:5673/graphx_test"
+MINIO_TEST_URL = "http://127.0.0.1:9002"
+SMOKE_BUCKET = "graphx-smoke-artifacts"
+
+
+def wait_for_minio() -> None:
+    import boto3  # type: ignore[import-untyped]
+    from botocore.config import Config  # type: ignore[import-untyped]
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=MINIO_TEST_URL,
+        region_name="local",
+        aws_access_key_id="test_access",
+        aws_secret_access_key="test_secret_password",
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            buckets = client.list_buckets()
+            if SMOKE_BUCKET not in {item["Name"] for item in buckets.get("Buckets", ())}:
+                client.create_bucket(Bucket=SMOKE_BUCKET)
+            return
+        except Exception:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 def run(*command: str, check: bool = True, env: dict[str, str] | None = None) -> int:
@@ -18,7 +45,11 @@ def run(*command: str, check: bool = True, env: dict[str, str] | None = None) ->
 def main() -> int:
     compose = ("docker", "compose", "-f", str(COMPOSE_FILE))
     try:
+        # Cold-starting Erlang and MinIO together can transiently exhaust the
+        # constrained Docker Desktop VM. Serial startup keeps the harness stable.
         run(*compose, "up", "-d", "--wait", "rabbitmq-test")
+        run(*compose, "up", "-d", "--wait", "minio-test")
+        wait_for_minio()
         run(*compose, "--profile", "image-smoke", "up", "-d", "--build", "source-worker-smoke")
         time.sleep(2)
         container_id = subprocess.run(
@@ -61,6 +92,9 @@ def main() -> int:
         )
         environment = os.environ.copy()
         environment["RABBITMQ_TEST_URL"] = TEST_URL
+        environment["MINIO_TEST_URL"] = MINIO_TEST_URL
+        environment["MINIO_TEST_ACCESS_KEY"] = "test_access"
+        environment["MINIO_TEST_SECRET_KEY"] = "test_secret_password"
         run(
             sys.executable,
             "tools/container_smoketest.py",
@@ -88,6 +122,10 @@ def main() -> int:
             env=environment,
             check=False,
         )
+    except subprocess.CalledProcessError:
+        run(*compose, "ps", "-a", check=False)
+        run(*compose, "logs", "--no-color", "rabbitmq-test", "minio-test", check=False)
+        raise
     finally:
         run(
             *compose,

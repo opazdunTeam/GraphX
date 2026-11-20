@@ -1,7 +1,7 @@
 """Stable adapter boundary; transport and infrastructure stay in the runtime."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from datetime import datetime
 from typing import Literal, Protocol, Self
 from uuid import UUID
@@ -106,15 +106,20 @@ class AdapterContext(Protocol):
 
     async def save_artifact(
         self,
-        content: bytes,
+        content: bytes | AsyncIterable[bytes],
         media_type: str,
         *,
+        local_ref: str,
         kind: Literal["raw_response", "document", "screenshot", "other"],
         source_uri: str,
         retrieved_at: AwareDatetime,
         published_at: AwareDatetime | None = None,
         http_metadata: dict[str, str] | None = None,
+        original_filename: str | None = None,
+        parent_local_ref: str | None = None,
     ) -> ArtifactReference: ...
+
+    def download_artifact(self, reference: ArtifactReference) -> AsyncIterator[bytes]: ...
 
 
 class SourceAdapter(Protocol):

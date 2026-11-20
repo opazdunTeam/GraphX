@@ -20,7 +20,9 @@
   "properties": {
     "local_ref": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\x00-\\x1F\u007F-\u009F]+$"
     },
     "kind": {
       "type": "string",
@@ -28,7 +30,9 @@
     },
     "object_key": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^artifacts/v1/[0-9a-f-]{36}/[1-9][0-9]*/[A-Za-z0-9_-]+$"
     },
     "sha256": {
       "type": "string",
@@ -36,7 +40,8 @@
     },
     "media_type": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 200
     },
     "byte_size": {
       "type": "integer",
@@ -44,7 +49,9 @@
     },
     "source_uri": {
       "type": "string",
-      "format": "uri"
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^https?://(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\s]*)?$"
     },
     "retrieved_at": {
       "type": "string",
@@ -56,9 +63,27 @@
     },
     "http_metadata": {
       "type": "object",
+      "propertyNames": {
+        "enum": ["etag", "last-modified", "content-language"]
+      },
       "additionalProperties": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "pattern": "^[^\\r\\n]+$"
       }
+    },
+    "original_filename": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?:[^ ./\\\\\\x00-\\x1F\u007F-\u009F]|[^ ./\\\\\\x00-\\x1F\u007F-\u009F][^/\\\\\\x00-\\x1F\u007F-\u009F]{0,253}[^ ./\\\\\\x00-\\x1F\u007F-\u009F])$"
+    },
+    "parent_local_ref": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\x00-\\x1F\u007F-\u009F]+$"
     }
   }
 }

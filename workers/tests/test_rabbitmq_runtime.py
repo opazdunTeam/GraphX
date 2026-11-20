@@ -3,17 +3,19 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import portalocker
 import pytest
+from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 from pydantic import AnyUrl
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.errors import ErrorClassification, ErrorCode
 from graphx_workers.contracts.messages import (
     CollectLimits,
@@ -24,6 +26,8 @@ from graphx_workers.contracts.messages import (
     parse_source_message,
 )
 from graphx_workers.contracts.schema import ContractSchemaRegistry, decode_contract_json
+from graphx_workers.runtime.artifacts import ArtifactSession
+from graphx_workers.runtime.errors import RuntimeFatalError
 from graphx_workers.runtime.processor import (
     AdapterContextFactory,
     AdapterRegistration,
@@ -37,6 +41,12 @@ from graphx_workers.runtime.replay import (
     ReplayStoreCapacityError,
     TerminalReplayStore,
     VolatileTerminalReplayStore,
+)
+from graphx_workers.runtime.s3 import (
+    ImmutableS3Store,
+    ObjectReconciliationError,
+    ObjectStoreCapacityError,
+    ObjectStoreOperationError,
 )
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
 from graphx_workers.sdk import (
@@ -52,6 +62,7 @@ from graphx_workers.sdk.errors import AdapterError
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 11, 20, 0, 0, tzinfo=UTC)
+JOB_ID = UUID("22222222-2222-4222-8222-222222222222")
 
 
 def durable_replay_store(
@@ -95,7 +106,7 @@ def command_bytes(
         producer="graphx-api",
         root_command_id=command_id,
         payload=SourceCollectRequestedPayload(
-            job_id=uuid4(),
+            job_id=JOB_ID,
             attempt_no=1,
             investigation_id=uuid4(),
             source=source,
@@ -113,7 +124,7 @@ def source_artifact() -> ArtifactReference:
     return ArtifactReference(
         local_ref="artifact:raw:1",
         kind="raw_response",
-        object_key="fixture/response.json",
+        object_key=artifact_object_key(JOB_ID, 1, "artifact:raw:1"),
         sha256="a" * 64,
         media_type="application/json",
         byte_size=2,
@@ -188,6 +199,93 @@ class FakeAdapter:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
+        return self.result
+
+
+class RegisterArtifactOnCancellationAdapter(FakeAdapter):
+    async def collect(
+        self, request: CollectRequest, context: RuntimeAdapterContext
+    ) -> CollectResult:
+        del request
+        try:
+            await asyncio.Future[None]()
+        except asyncio.CancelledError:
+            cast(FakeContext, context).saved_artifacts = (source_artifact(),)
+            raise
+        raise AssertionError("cancellation test adapter unexpectedly resumed")
+
+
+class CancellationResistantAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+        self.cancellations = 0
+
+    async def collect(
+        self, request: CollectRequest, context: RuntimeAdapterContext
+    ) -> CollectResult:
+        del request, context
+        self.started.set()
+        while not self.release.is_set():
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancellations += 1
+        return self.result
+
+
+class ServiceErrorS3Client:
+    def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        kwargs["Body"].read()
+        raise ClientError(
+            {
+                "Error": {"Code": "SlowDown"},
+                "ResponseMetadata": {"HTTPStatusCode": 503},
+            },
+            "PutObject",
+        )
+
+    def head_object(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        raise ClientError(
+            {
+                "Error": {"Code": "NoSuchKey"},
+                "ResponseMetadata": {"HTTPStatusCode": 404},
+            },
+            "HeadObject",
+        )
+
+
+class DelayedAccessDeniedS3Client(ServiceErrorS3Client):
+    def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        kwargs["Body"].read()
+        time.sleep(0.03)
+        raise ClientError(
+            {
+                "Error": {"Code": "AccessDenied"},
+                "ResponseMetadata": {"HTTPStatusCode": 403},
+            },
+            "PutObject",
+        )
+
+
+class StoreWritingAdapter(FakeAdapter):
+    def __init__(self, artifact_session: ArtifactSession) -> None:
+        super().__init__()
+        self.artifact_session = artifact_session
+
+    async def collect(
+        self, request: CollectRequest, context: RuntimeAdapterContext
+    ) -> CollectResult:
+        del request, context
+        await self.artifact_session.save(
+            b"evidence",
+            "text/plain",
+            local_ref="artifact:raw:1",
+            kind="raw_response",
+            source_uri="https://example.test/source/1",
+            retrieved_at=NOW,
+        )
         return self.result
 
 
@@ -340,6 +438,24 @@ async def test_replay_claim_recovers_after_owner_cancellation(tmp_path: Path) ->
     result = await processor(recovered_adapter, replay_store=replay_store).prepare(raw)
     assert result.message_type == "source.collect.completed.v1"
     assert recovered_adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retains_unfinished_single_flight_task() -> None:
+    adapter = CancellationResistantAdapter()
+    runtime = processor(adapter)
+    preparing = asyncio.create_task(runtime.prepare(command_bytes()))
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    try:
+        await runtime.cancel_inflight(timeout=0.01)
+        assert len(runtime._inflight) == 1
+        assert adapter.cancellations >= 1
+    finally:
+        adapter.release.set()
+    result = await asyncio.wait_for(preparing, timeout=1)
+    assert result.message_type == "source.collect.completed.v1"
+    assert runtime._inflight == {}
 
 
 @pytest.mark.asyncio
@@ -534,7 +650,7 @@ async def test_oversized_failure_never_publishes_partial_artifact_list(tmp_path:
         source_artifact().model_copy(
             update={
                 "local_ref": f"artifact:raw:{index}",
-                "object_key": f"fixture/response-{index}.json",
+                "object_key": artifact_object_key(JOB_ID, 1, f"artifact:raw:{index}"),
             }
         )
         for index in range(100)
@@ -547,7 +663,7 @@ async def test_oversized_failure_never_publishes_partial_artifact_list(tmp_path:
         context_factory=context_factory,
     )
     events: list[str] = []
-    failures: list[ReplayStoreCapacityError] = []
+    failures: list[RuntimeFatalError] = []
     publisher = FakePublisher(events)
     handler = SourceDeliveryHandler(
         runtime,
@@ -561,6 +677,147 @@ async def test_oversized_failure_never_publishes_partial_artifact_list(tmp_path:
     assert events == ["nack:True"]
     assert publisher.messages == []
     assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_uncertain_artifact_persistence_requeues_without_terminal_result() -> None:
+    events: list[str] = []
+    delivery = FakeDelivery(command_bytes(), events)
+    publisher = FakePublisher(events)
+    handler = SourceDeliveryHandler(
+        processor(
+            FakeAdapter(
+                error=ObjectReconciliationError(
+                    "conditional artifact write outcome is still uncertain"
+                )
+            )
+        ),
+        publisher,
+        logging.getLogger("test"),
+    )
+
+    await handler.handle(delivery)
+
+    assert events == ["nack:True"]
+    assert publisher.messages == []
+
+
+@pytest.mark.asyncio
+async def test_s3_service_client_error_requeues_without_terminal_result() -> None:
+    artifact_session = ArtifactSession(
+        ImmutableS3Store(
+            cast(Any, ServiceErrorS3Client()),
+            "artifacts",
+            require_versioning=False,
+            reconciliation_timeout=0.01,
+        ),
+        job_id=JOB_ID,
+        attempt_no=1,
+        max_bytes=1024,
+        spool_max_memory_bytes=16,
+        allowed_media_types=frozenset({"text/plain"}),
+    )
+    events: list[str] = []
+    delivery = FakeDelivery(command_bytes(), events)
+    publisher = FakePublisher(events)
+    handler = SourceDeliveryHandler(
+        processor(StoreWritingAdapter(artifact_session)),
+        publisher,
+        logging.getLogger("test"),
+    )
+
+    await handler.handle(delivery)
+
+    assert events == ["nack:True"]
+    assert publisher.messages == []
+
+
+@pytest.mark.asyncio
+async def test_deadline_during_s3_fatal_error_requeues_and_stops_consumer() -> None:
+    artifact_session = ArtifactSession(
+        ImmutableS3Store(
+            cast(Any, DelayedAccessDeniedS3Client()),
+            "artifacts",
+            require_versioning=False,
+        ),
+        job_id=JOB_ID,
+        attempt_no=1,
+        max_bytes=1024,
+        spool_max_memory_bytes=16,
+        allowed_media_types=frozenset({"text/plain"}),
+    )
+    events: list[str] = []
+    failures: list[RuntimeFatalError] = []
+    publisher = FakePublisher(events)
+    handler = SourceDeliveryHandler(
+        processor(
+            StoreWritingAdapter(artifact_session),
+            job_timeout=timedelta(milliseconds=5),
+        ),
+        publisher,
+        logging.getLogger("test"),
+        failures.append,
+    )
+
+    await handler.handle(FakeDelivery(command_bytes(), events))
+
+    assert events == ["nack:True"]
+    assert publisher.messages == []
+    assert len(failures) == 1
+    assert isinstance(failures[0], ObjectStoreOperationError)
+
+
+@pytest.mark.asyncio
+async def test_object_store_capacity_requeues_and_stops_consumer() -> None:
+    events: list[str] = []
+    failures: list[RuntimeFatalError] = []
+    publisher = FakePublisher(events)
+    handler = SourceDeliveryHandler(
+        processor(FakeAdapter(error=ObjectStoreCapacityError("S3 capacity exhausted"))),
+        publisher,
+        logging.getLogger("test"),
+        failures.append,
+    )
+
+    await handler.handle(FakeDelivery(command_bytes(), events))
+
+    assert events == ["nack:True"]
+    assert publisher.messages == []
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_object_store_configuration_error_requeues_and_stops_consumer() -> None:
+    events: list[str] = []
+    failures: list[RuntimeFatalError] = []
+    publisher = FakePublisher(events)
+    handler = SourceDeliveryHandler(
+        processor(FakeAdapter(error=ObjectStoreOperationError("S3 access denied"))),
+        publisher,
+        logging.getLogger("test"),
+        failures.append,
+    )
+
+    await handler.handle(FakeDelivery(command_bytes(), events))
+
+    assert events == ["nack:True"]
+    assert publisher.messages == []
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_deadline_failure_contains_artifact_registered_during_cancellation() -> None:
+    context = FakeContextFactory()
+    prepared = await processor(
+        RegisterArtifactOnCancellationAdapter(),
+        context_factory=context,
+        job_timeout=timedelta(milliseconds=10),
+    ).prepare(command_bytes(deadline=NOW + timedelta(minutes=1)))
+
+    result = parse_source_message(decode_contract_json(prepared.body))
+    assert isinstance(result, SourceCollectFailed)
+    assert result.payload.error.code is ErrorCode.SOURCE_TIMEOUT
+    assert result.payload.artifacts == [source_artifact()]
 
 
 @pytest.mark.asyncio
@@ -755,7 +1012,7 @@ async def test_replay_capacity_requeues_delivery_and_stops_consumer(tmp_path: Pa
     runtime = processor(FakeAdapter(), replay_store=replay_store)
     await runtime.prepare(command_bytes())
     events: list[str] = []
-    failures: list[ReplayStoreCapacityError] = []
+    failures: list[RuntimeFatalError] = []
     publisher = FakePublisher(events)
     handler = SourceDeliveryHandler(
         runtime,
