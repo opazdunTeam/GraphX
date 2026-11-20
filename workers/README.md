@@ -102,6 +102,7 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest
+uv run python tools/integrationtest.py
 ```
 
 ### Linux
@@ -117,8 +118,23 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest
+uv run python tools/integrationtest.py
 ```
 
-Без `--check` entrypoint запускает lifecycle scaffold и ожидает остановки. Подключение RabbitMQ и MinIO добавляется отдельно; до этого процесс явно сообщает scaffold mode и не выдаёт idle-состояние за обработку заданий. Source-specific подпакет с `client`, `parser`, `mapper`, `metadata` и обезличенными fixtures добавляется вместе с первым fixture/real adapter.
+Без `--check` source entrypoint требует `RABBITMQ_URL`, объявляет `commands.topic`, `events.topic` и `source.collect.q`, применяет `RABBITMQ_PREFETCH_SOURCE`, ограничивает активные обработчики через `WORKER_CONCURRENCY` и запускает manual-ACK consumer. Runtime проверяет входные и итоговые bytes по общим JSON Schema, передаёт adapter только SDK context, атомарно сохраняет exact terminal bytes в `TERMINAL_REPLAY_ROOT`, публикует их с publisher confirm и лишь затем подтверждает команду. При shutdown новые доставки останавливаются, выполняющиеся задания получают ограниченное время на завершение, после чего повторно отменяются без ACK, а оставшееся время используется для закрытия transport.
+
+`TERMINAL_REPLAY_ROOT` должен находиться на durable volume, общем для реплик одной consumer group и поддерживающем advisory file locks и atomic hard links. Межпроцессный claim берётся до adapter execution и автоматически освобождается ядром после смерти владельца. После acquisition runtime сверяет inode открытого lock с актуальным pathname, поэтому waiter на удалённом cleanup inode не может работать параллельно с владельцем вновь созданного lock. Journal сохраняется до первой публикации и обеспечивает точное переиздание результата после потери confirm или перезапуска.
+
+`TERMINAL_REPLAY_RETENTION` по умолчанию равен 30 суткам и не может быть меньше суток. Cleanup удаляет только entries за пределами окна со свободным claim; возраст команды сам по себе не запрещает обработку. Настройки `TERMINAL_REPLAY_MAX_ENTRIES`, `TERMINAL_REPLAY_MAX_BYTES` и `TERMINAL_REPLAY_MAX_ENTRY_BYTES` ограничивают journal. Общая нехватка capacity возвращает delivery в очередь и останавливает consumer с ошибкой, чтобы команда не потерялась и не образовала горячий retry loop. Oversized terminal заменяется компактным `CONTRACT_VALIDATION_FAILED` только если в него помещаются реальная версия адаптера и все сохранённые artifacts; частичный список не публикуется, а невозможность сохранить полный failure переводит runtime в capacity-fatal режим. Hot path использует атомарный metadata index, а полный обход каталога выполняется только при cleanup/reconciliation. Journal не заменяет immutable artifact storage: смерть процесса после внешнего запроса, но до terminal result допускает последовательный повтор, поэтому artifact key и проверка hash остаются обязательной частью #11.
+
+До задачи fixture-адаптера registry источников пуст: валидная команда получает стабильный `SOURCE_UNSUPPORTED_OPERATION`, а не остаётся незавершённой. Immutable artifact storage и manifest finalizer подключаются отдельным инфраструктурным срезом; transport runtime не получает доступ к PostgreSQL. Document и browser entrypoints пока остаются явными scaffold-процессами.
+
+Production image собирается из корня репозитория, чтобы сохранить единый источник JSON Schema:
+
+```bash
+docker build -f workers/Dockerfile .
+```
+
+Production image устанавливает runtime и все транзитивные зависимости через `uv sync --locked --no-dev` из committed `uv.lock`. `tools/integrationtest.py` поднимает изолированный RabbitMQ, собирает этот image, проводит через контейнер реальный command→failed-result flow, а затем проверяет confirm/ACK, broker NACK, физический разрыв AMQP-соединения до confirm, concurrency и graceful shutdown. После проверки контейнеры, сеть и volume удаляются. Обычный `pytest` пропускает broker-тесты без `RABBITMQ_TEST_URL`.
 
 См. [контракт адаптера](../docs/10-source-adapters.md) и [сообщения RabbitMQ](../docs/09-messaging.md).

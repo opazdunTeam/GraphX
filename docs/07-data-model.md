@@ -36,6 +36,8 @@ flowchart LR
 
 `source_jobs` - бизнес-состояние обращения к источнику. Оно не является копией очереди. Поля должны включать расследование, источник, операцию, назначение, status, номер попытки, лимит попыток, время следующего повтора, request hash, idempotency key и сведения об ошибке. Новая строка создаётся только для `running` investigation в состоянии `pending` с `attempt_no = 1`. Переходы, запускающие или планирующие работу (`pending`, `queued`, `running`, `retry_wait`), повторно проверяют investigation под блокировкой; terminal investigation не может получить новую или возобновлённую работу.
 
+Временные поля `source_jobs` описывают lifecycle задания целиком, а не отдельной попытки: `queued_at` и `started_at` фиксируют первое соответствующее событие, `finished_at` заполняется только при terminal outcome. При новой попытке сохраняются первые timestamps и `last_error_*` как последняя известная ошибка, очищаются `next_attempt_at` и ошибочно либо ранее выставленный `finished_at`. История результатов отдельных попыток хранится в append-only `source_job_results`.
+
 Статусы задания: `pending`, `queued`, `running`, `retry_wait`, `succeeded`, `not_found`, `action_required`, `unavailable`, `failed`, `cancelled`.
 
 Допустимые переходы расследования и задания зафиксированы в [ходе расследования](04-investigation-flow.md#переходы-расследования).

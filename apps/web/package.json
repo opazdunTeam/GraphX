@@ -13,6 +13,7 @@
     "build": "pnpm typecheck && pnpm build-only",
     "build-only": "vite build",
     "generate:api": "openapi-typescript ../../contracts/openapi.yaml -o src/shared/api/generated/openapi.ts",
+    "lint:openapi": "redocly lint ../../contracts/openapi.yaml --config ../../redocly.yaml --format=github-actions",
     "check:api": "node scripts/check-generated-api.mjs",
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "typecheck": "vue-tsc --build",
@@ -21,7 +22,7 @@
     "format:check": "prettier --check .",
     "test": "vitest",
     "test:run": "vitest run",
-    "check": "pnpm check:api && pnpm check:architecture && pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
+    "check": "pnpm lint:openapi && pnpm check:api && pnpm check:architecture && pnpm typecheck && pnpm lint && pnpm test:run && pnpm format:check"
   },
   "dependencies": {
     "pinia": "4.1.0",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@redocly/cli": "2.76.0",
     "@types/node": "26.6.6",
     "@vitejs/plugin-vue": "6.0.10",
     "@vue/test-utils": "2.5.1",

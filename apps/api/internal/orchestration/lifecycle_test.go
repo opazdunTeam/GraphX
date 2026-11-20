@@ -76,3 +76,36 @@ func TestNewAttemptMustIncrementOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownStatusesAreRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		from, to Status
+	}{
+		{name: "unknown self transition", from: Status("unknown"), to: Status("unknown")},
+		{name: "unknown source", from: Status("unknown"), to: StatusPending},
+		{name: "unknown target", from: StatusPending, to: Status("unknown")},
+		{name: "empty self transition", from: Status(""), to: Status("")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if CanTransition(test.from, test.to) {
+				t.Fatalf("CanTransition(%q, %q) = true", test.from, test.to)
+			}
+			if err := AllowedTransition(test.from, test.to); err == nil {
+				t.Fatalf("AllowedTransition(%q, %q) accepted unknown status", test.from, test.to)
+			}
+			if err := ValidateAttemptTransition(test.from, test.to, 1, 1); err == nil {
+				t.Fatalf("ValidateAttemptTransition(%q, %q) accepted unknown status", test.from, test.to)
+			}
+		})
+	}
+
+	if IsKnownStatus(Status("unknown")) || IsKnownStatus(Status("")) {
+		t.Fatal("unknown status reported as known")
+	}
+	if !IsKnownStatus(StatusPending) || !IsKnownStatus(StatusSucceeded) {
+		t.Fatal("documented status reported as unknown")
+	}
+}

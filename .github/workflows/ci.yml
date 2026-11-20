@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require Go lock file
+        run: test -s apps/api/go.sum
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Verify modules
+        working-directory: apps/api
+        run: go mod verify
+
+      - name: Run Go checks
+        working-directory: apps/api
+        env:
+          GOFLAGS: -mod=readonly
+        run: make check
+
+      - name: Run Go race tests
+        working-directory: apps/api
+        env:
+          GOFLAGS: -mod=readonly
+        run: make test-race
+
+      - name: Verify clean working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  python:
+    name: Python
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require Python lock file
+        run: test -s workers/uv.lock
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.9
+          python-version: "3.15"
+          enable-cache: true
+          cache-python: true
+          cache-dependency-glob: workers/uv.lock
+
+      - name: Install Python
+        run: uv python install 3.15
+
+      - name: Synchronize locked dependencies
+        working-directory: workers
+        run: uv sync --locked
+
+      - name: Check Python formatting
+        working-directory: workers
+        run: uv run --locked ruff format --check .
+
+      - name: Lint Python
+        working-directory: workers
+        run: uv run --locked ruff check .
+
+      - name: Type-check Python
+        working-directory: workers
+        run: uv run --locked mypy
+
+      - name: Test Python
+        working-directory: workers
+        run: uv run --locked pytest
+
+      - name: Test RabbitMQ runtime
+        working-directory: workers
+        run: uv run --locked python tools/integrationtest.py
+
+      - name: Remove RabbitMQ integration environment
+        if: always()
+        working-directory: workers
+        run: docker compose -f docker-compose.test.yaml --profile image-smoke down -v --remove-orphans
+
+      - name: Verify clean working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  web:
+    name: Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require web lock file
+        run: test -s apps/web/pnpm-lock.yaml
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@9bbca1e9dc2902adb87e8780fe5c98796985a62d # v6.1.1
+        with:
+          version: 11.28.11
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install locked web dependencies
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Check web application and contracts
+        working-directory: apps/web
+        run: pnpm check
+
+      - name: Build web application
+        working-directory: apps/web
+        run: pnpm build
+
+      - name: Verify clean working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  postgres:
+    name: PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require Go lock file
+        run: test -s apps/api/go.sum
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Run PostgreSQL migration and integration tests
+        working-directory: apps/api
+        env:
+          GOFLAGS: -mod=readonly
+        run: make test-integration
+
+      - name: Remove integration environment
+        if: always()
+        working-directory: apps/api
+        run: docker compose -f docker-compose.test.yaml down -v --remove-orphans
+
+      - name: Verify clean working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"

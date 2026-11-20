@@ -113,3 +113,33 @@ cd ../apps/web
 pnpm check
 pnpm build
 ```
+
+## Обязательный CI
+
+Обычный pull request запускает `.github/workflows/ci.yml`. Jobs `Go`, `Python`, `Web` и `PostgreSQL` независимы и выполняются параллельно; workflow не использует path-фильтры, credentials внешних источников, live source smoke или deployment.
+
+Локальные эквиваленты jobs:
+
+```bash
+cd apps/api
+make check
+make test-race
+
+cd ../../workers
+uv sync --locked
+uv run --locked ruff format --check .
+uv run --locked ruff check .
+uv run --locked mypy
+uv run --locked pytest
+uv run --locked python tools/integrationtest.py
+
+cd ../apps/web
+pnpm install --frozen-lockfile
+pnpm check
+pnpm build
+
+cd ../api
+make test-integration
+```
+
+CI до восстановления кеша проверяет наличие `go.sum`, `uv.lock` и `pnpm-lock.yaml`, а после проверок требует отсутствие tracked-изменений и неожиданных untracked-файлов. Python job поднимает изолированный RabbitMQ 4.2, собирает production worker image через `uv sync --locked`, проводит command→result через сам контейнер и проверяет confirm/ACK, broker NACK, потерю AMQP-соединения до confirm, межпроцессный claim, repeat delivery, concurrency и graceful shutdown. После проверки тестовое окружение всегда удаляется. OpenAPI lint входит в `pnpm check`; Go- и TypeScript-генераторы повторно обрабатывают единый `contracts/openapi.yaml` и проверяют ключевую форму generated-типов. Прямой push в `develop` разрешён и запускает полный CI. В `main` изменения попадают только через Pull Request после обязательных checks `Go`, `Python`, `Web` и `PostgreSQL`.
