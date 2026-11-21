@@ -44,7 +44,7 @@ from graphx_workers.runtime.replay import (
     VolatileTerminalReplayStore,
 )
 from graphx_workers.runtime.terminal import TerminalMessageFactory
-from graphx_workers.sdk import CollectRequest, CollectResult, SourceAdapter
+from graphx_workers.sdk import AdapterMetadata, CollectRequest, CollectResult, SourceAdapter
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_URL = os.environ.get("RABBITMQ_TEST_URL")
@@ -80,6 +80,12 @@ class FakeContextFactory(AdapterContextFactory):
 
 
 class FakeAdapter:
+    metadata = AdapterMetadata(
+        source="fixture",
+        version="fixture-adapter/1",
+        supported_operations=frozenset({"collect"}),
+    )
+
     def __init__(
         self,
         gate: asyncio.Event | None = None,
@@ -253,8 +259,6 @@ def build_runtime(
         FakeContextFactory(),
         (
             AdapterRegistration(
-                source="fixture",
-                version="fixture-adapter/1",
                 adapter=cast(SourceAdapter, adapter),
             ),
         ),

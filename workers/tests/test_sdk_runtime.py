@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,9 +26,45 @@ from graphx_workers.runtime.results import (
     build_manifest_source_result,
     prepare_manifest,
 )
-from graphx_workers.sdk import CollectRequest, CollectResult
+from graphx_workers.sdk import AdapterMetadata, CollectRequest, CollectResult
 
 JOB_ID = UUID("22222222-2222-4222-8222-222222222222")
+
+
+def test_adapter_metadata_requires_deeply_immutable_operations() -> None:
+    mutable_operations = {"collect"}
+    with pytest.raises(TypeError, match="must be a frozenset"):
+        AdapterMetadata(
+            source="fixture",
+            version="fixture/1",
+            supported_operations=cast(frozenset[str], mutable_operations),
+        )
+
+    metadata = AdapterMetadata(
+        source="fixture",
+        version="fixture/1",
+        supported_operations=frozenset({"collect"}),
+    )
+    with pytest.raises(AttributeError):
+        metadata.supported_operations.add("unexpected")  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        cast(frozenset[str], "collect"),
+        cast(frozenset[str], frozenset({"collect", 1})),
+    ],
+)
+def test_adapter_metadata_rejects_invalid_operation_collections(
+    operations: frozenset[str],
+) -> None:
+    with pytest.raises(TypeError):
+        AdapterMetadata(
+            source="fixture",
+            version="fixture/1",
+            supported_operations=operations,
+        )
 
 
 def source_artifact(

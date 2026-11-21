@@ -14,11 +14,12 @@
 
 ## Контракт
 
-Логически адаптер реализует операцию вроде `collect(request, context)`. Request содержит запрос, operation, purpose, лимиты и deadline. Общий запрос передаёт вид субъекта и как минимум исходное имя либо известный идентификатор. Адаптер сам переводит их в параметры конкретного источника и отклоняет неподдерживаемую operation. Context предоставляет общий HTTP client, rate limiter, artifact storage, логирование, trace, cancellation, progress и доступ к секретам. Runtime также привязывает к context `job_id`, `attempt_no`, `correlation_id` и effective deadline — минимум command deadline, command timeout и worker timeout. Создание context уже входит в этот временной бюджет. Так инфраструктурные capabilities строят детерминированные ключи и operational metadata, не раскрывая adapter transport envelope.
+Логически адаптер реализует операцию вроде `collect(request, context)` и объявляет минимальный immutable `AdapterMetadata` первого вертикального среза: source, version и непустой `frozenset` supported operations. Runtime строит регистрацию из metadata самого адаптера, до его вызова отклоняет неподдерживаемую operation и проверяет, что версия успешного результата совпадает с объявленной. Поэтому success и typed failure не могут разойтись по provenance из-за вручную продублированной регистрации. Request содержит запрос, operation, purpose, лимиты и deadline. Общий запрос передаёт вид субъекта и как минимум исходное имя либо известный идентификатор. Адаптер сам переводит их в параметры конкретного источника и дополнительно проверяет source-specific ограничения. Context предоставляет общий HTTP client, rate limiter, artifact storage, логирование, trace, cancellation, progress и доступ к секретам. Runtime также привязывает к context `job_id`, `attempt_no`, `correlation_id` и effective deadline — минимум command deadline, command timeout и worker timeout. Создание context уже входит в этот временной бюджет. Так инфраструктурные capabilities строят детерминированные ключи и operational metadata, не раскрывая adapter transport envelope.
 
 Адаптер не должен самостоятельно создавать подключения к RabbitMQ, MinIO или отдельную систему логов.
 
-Metadata описывает:
+Расширенная metadata каталога источников развивается вместе с production registry после первого
+среза и должна описывать:
 
 - код и версию адаптера;
 - поддерживаемые операции;

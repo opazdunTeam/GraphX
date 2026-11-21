@@ -60,6 +60,11 @@ MinIO- или HTTP-реализаций: он объявляет только м
 или digest: adapter возвращает содержательные artifacts/records/claims, а transport packaging
 выполняет runtime после успешного завершения adapter.
 
+Каждый source adapter объявляет immutable `AdapterMetadata` с source, version и supported
+operations. Runtime строит регистрацию из этой metadata, проверяет operation до вызова адаптера и
+не принимает успешный результат с другой adapter version. Ручное дублирование identity при
+регистрации запрещено, поэтому completed и failed сообщения используют согласованную provenance.
+
 ## Использование контрактов
 
 Общие RabbitMQ- и ingest-контракты находятся в [`contracts/schemas`](../contracts/schemas), а полные примеры - в [`contracts/examples`](../contracts/examples). Они задают переносимую границу между Python workers и Go, но не описывают ответы конкретных источников.
@@ -82,8 +87,9 @@ Pydantic-модели workers располагаются в `src/graphx_workers/
 Доступны три тонких entrypoint с общим runtime. Это режимы развёртывания одного Python-пакета,
 а не три независимых набора контрактов. В MVP обязательны только `source.collect.*`; отдельные
 `document.parse.*` и `browser.collect.*` не вводятся, пока для них не появятся собственные очередь
-или процессная необходимость. Каталоги `sources`, `documents` и `normalization` остаются без
-прикладной реализации до появления первого использующего их вертикального среза.
+или процессная необходимость. В `sources/fixture` находится детерминированный fixture-адаптер;
+каталоги `documents` и `normalization` остаются без прикладной реализации до появления первого
+использующего их вертикального среза.
 
 Все команды ниже выполняются из корня репозитория.
 
@@ -131,7 +137,17 @@ Immutable storage использует key `artifacts/v1/{job_id}/{attempt_no}/{
 
 GET/read/close выполняются одним владеющим daemon worker и передают chunks через bounded очередь; cancellation прекращает потребление, но не закрывает body параллельно с `read`. `S3_MAX_INFLIGHT_OPERATIONS` ограничивает все живые SDK operations, включая detached вызовы, и при настроенном storage не может быть ниже `WORKER_CONCURRENCY`. Slot освобождается только после фактического завершения blocking lifecycle; исчерпание лимита и постоянные ошибки конфигурации object store приводят к NACK и остановке consumer, а не к adapter terminal result или hot requeue loop. Подтверждённая infrastructure failure имеет приоритет над одновременной cancellation/deadline.
 
-До задачи fixture-адаптера registry источников пуст: валидная команда получает стабильный `SOURCE_UNSUPPORTED_OPERATION`, а не остаётся незавершённой. Immutable artifact storage и manifest finalizer подключаются отдельным инфраструктурным срезом; transport runtime не получает доступ к PostgreSQL. Document и browser entrypoints пока остаются явными scaffold-процессами.
+`sources/fixture` реализует не использующий сеть synthetic adapter для проверки полного SDK/runtime
+контракта. Он поддерживает `search_subject` для `person`; идентификатор `fixture_case` выбирает
+детерминированный сценарий `success`, `not_found`, `transient` или `permanent`. Сырые ответы
+сохраняются через `AdapterContext.save_artifact` до parsing/mapping. Fixture не содержит реальных
+персональных данных и не обращается к RabbitMQ, PostgreSQL или object storage напрямую.
+
+Production registry источников остаётся пуст до инфраструктурного среза #19: валидная команда
+получает стабильный `SOURCE_UNSUPPORTED_OPERATION`, а не остаётся незавершённой. Подключение
+fixture-адаптера к immutable artifact storage и manifest finalizer выполняется там же; transport
+runtime не получает доступ к PostgreSQL. Document и browser entrypoints пока остаются явными
+scaffold-процессами.
 
 Production image собирается из корня репозитория, чтобы сохранить единый источник JSON Schema:
 

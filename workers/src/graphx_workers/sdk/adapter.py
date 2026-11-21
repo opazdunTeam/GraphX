@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, Self
 from uuid import UUID
@@ -13,6 +14,29 @@ from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.messages import CollectLimits, SourceQuery
 from graphx_workers.contracts.records import SourceRecord
 from graphx_workers.contracts.results import validate_result_content
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterMetadata:
+    """Immutable source identity and capabilities declared by an adapter."""
+
+    source: str
+    version: str
+    supported_operations: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, str) or not isinstance(self.version, str):
+            raise TypeError("adapter source and version must be strings")
+        if not self.source or not self.version:
+            raise ValueError("adapter source and version must not be empty")
+        if not isinstance(self.supported_operations, frozenset):
+            raise TypeError("adapter supported_operations must be a frozenset")
+        if any(not isinstance(operation, str) for operation in self.supported_operations):
+            raise TypeError("adapter supported operations must be strings")
+        if not self.supported_operations or any(
+            not operation for operation in self.supported_operations
+        ):
+            raise ValueError("adapter must declare non-empty supported operations")
 
 
 class CollectRequest(BaseModel):
@@ -123,6 +147,8 @@ class AdapterContext(Protocol):
 
 
 class SourceAdapter(Protocol):
+    metadata: AdapterMetadata
+
     async def collect(
         self,
         request: CollectRequest,

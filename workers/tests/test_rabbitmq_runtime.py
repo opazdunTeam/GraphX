@@ -51,6 +51,7 @@ from graphx_workers.runtime.s3 import (
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
 from graphx_workers.sdk import (
     ActionRequiredError,
+    AdapterMetadata,
     CollectRequest,
     CollectResult,
     PermanentAdapterError,
@@ -93,6 +94,7 @@ def command_bytes(
     *,
     message_id: UUID | None = None,
     source: str = "fixture",
+    operation: str = "collect",
     deadline: datetime | None = None,
 ) -> bytes:
     command_id = message_id or uuid4()
@@ -110,7 +112,7 @@ def command_bytes(
             attempt_no=1,
             investigation_id=uuid4(),
             source=source,
-            operation="collect",
+            operation=operation,
             purpose="subject_discovery",
             query=SourceQuery(type="person", name="Example"),
             limits=CollectLimits(max_records=10, max_bytes=1024, timeout_seconds=30),
@@ -177,6 +179,12 @@ class FakeContextFactory(AdapterContextFactory):
 
 
 class FakeAdapter:
+    metadata = AdapterMetadata(
+        source="fixture",
+        version="fixture-adapter/1",
+        supported_operations=frozenset({"collect"}),
+    )
+
     def __init__(
         self,
         result: CollectResult | None = None,
@@ -306,8 +314,6 @@ def processor(
         context_factory or FakeContextFactory(),
         (
             AdapterRegistration(
-                source="fixture",
-                version="fixture-adapter/1",
                 adapter=cast(SourceAdapter, adapter),
             ),
         ),
@@ -336,6 +342,36 @@ async def test_processor_builds_valid_result_and_replays_exact_bytes() -> None:
     assert context_factory.context.attempt_no == command.payload.attempt_no
     assert context_factory.context.correlation_id == command.correlation_id
     assert context_factory.context.deadline == NOW + timedelta(seconds=30)
+
+
+@pytest.mark.asyncio
+async def test_processor_rejects_operation_outside_adapter_metadata() -> None:
+    adapter = FakeAdapter()
+    context_factory = FakeContextFactory()
+
+    prepared = await processor(adapter, context_factory=context_factory).prepare(
+        command_bytes(operation="unsupported")
+    )
+    result = parse_source_message(decode_contract_json(prepared.body))
+
+    assert isinstance(result, SourceCollectFailed)
+    assert result.payload.error.code is ErrorCode.SOURCE_UNSUPPORTED_OPERATION
+    assert result.payload.adapter_version == adapter.metadata.version
+    assert adapter.calls == 0
+    assert context_factory.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_processor_rejects_result_version_outside_adapter_metadata() -> None:
+    mismatched = not_found_result().model_copy(update={"adapter_version": "fixture-adapter/other"})
+    adapter = FakeAdapter(result=mismatched)
+
+    prepared = await processor(adapter).prepare(command_bytes())
+    result = parse_source_message(decode_contract_json(prepared.body))
+
+    assert isinstance(result, SourceCollectFailed)
+    assert result.payload.error.code is ErrorCode.INTERNAL_ADAPTER_ERROR
+    assert result.payload.adapter_version == adapter.metadata.version
 
 
 @pytest.mark.asyncio

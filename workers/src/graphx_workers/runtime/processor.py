@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
@@ -28,7 +28,12 @@ from graphx_workers.runtime.replay import (
 from graphx_workers.runtime.requests import to_collect_request
 from graphx_workers.runtime.results import build_inline_source_result
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
-from graphx_workers.sdk.adapter import AdapterContext, CollectResult, SourceAdapter
+from graphx_workers.sdk.adapter import (
+    AdapterContext,
+    AdapterMetadata,
+    CollectResult,
+    SourceAdapter,
+)
 from graphx_workers.sdk.errors import AdapterError
 
 RUNTIME_VERSION = "graphx-worker-runtime/1"
@@ -80,9 +85,22 @@ class InlineResultFinalizer:
 
 @dataclass(frozen=True, slots=True)
 class AdapterRegistration:
-    source: str
-    version: str
     adapter: SourceAdapter
+    metadata: AdapterMetadata = field(init=False)
+
+    def __post_init__(self) -> None:
+        metadata = getattr(self.adapter, "metadata", None)
+        if not isinstance(metadata, AdapterMetadata):
+            raise TypeError("source adapter must expose AdapterMetadata")
+        object.__setattr__(self, "metadata", metadata)
+
+    @property
+    def source(self) -> str:
+        return self.metadata.source
+
+    @property
+    def version(self) -> str:
+        return self.metadata.version
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +250,21 @@ class SourceCommandProcessor:
                 artifacts=(),
             )
 
+        if command.payload.operation not in registration.metadata.supported_operations:
+            return _ExecutionOutcome(
+                message=self._terminal_factory.failed(
+                    command,
+                    adapter_version=registration.version,
+                    artifacts=(),
+                    error=AdapterError(
+                        ErrorCode.SOURCE_UNSUPPORTED_OPERATION,
+                        "source operation is not supported by the adapter",
+                    ),
+                ),
+                adapter_version=registration.version,
+                artifacts=(),
+            )
+
         context: RuntimeAdapterContext | None = None
         try:
             now = self._clock()
@@ -254,6 +287,8 @@ class SourceCommandProcessor:
                     to_collect_request(command.payload),
                     context,
                 )
+                if collected.adapter_version != registration.version:
+                    raise ValueError("adapter result version does not match its metadata")
                 result = await self._result_finalizer.finalize(command, collected, context)
             artifacts = self._artifacts(context)
             return _ExecutionOutcome(
