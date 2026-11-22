@@ -1,13 +1,15 @@
 import asyncio
 import io
+import logging
 import subprocess
 import sys
 import tempfile
 import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from botocore.exceptions import (  # type: ignore[import-untyped]
@@ -15,6 +17,16 @@ from botocore.exceptions import (  # type: ignore[import-untyped]
     EndpointConnectionError,
 )
 
+from graphx_workers.config import WorkerSettings
+from graphx_workers.contracts.messages import (
+    CollectLimits,
+    SourceCollectCompleted,
+    SourceCollectRequested,
+    SourceCollectRequestedPayload,
+    SourceQuery,
+    parse_source_message,
+)
+from graphx_workers.contracts.schema import ContractSchemaRegistry, decode_contract_json
 from graphx_workers.runtime.artifacts import (
     ArtifactPersistenceDrainError,
     ArtifactPolicyError,
@@ -22,7 +34,11 @@ from graphx_workers.runtime.artifacts import (
     sanitize_http_metadata,
     sanitize_original_filename,
 )
+from graphx_workers.runtime.context import ArtifactContextFactory
 from graphx_workers.runtime.errors import RuntimeFatalError
+from graphx_workers.runtime.finalization import ManifestResultFinalizer
+from graphx_workers.runtime.processor import AdapterRegistration, SourceCommandProcessor
+from graphx_workers.runtime.replay import StoredTerminalMessage, VolatileTerminalReplayStore
 from graphx_workers.runtime.s3 import (
     ImmutableS3Store,
     ObjectConflictError,
@@ -31,6 +47,8 @@ from graphx_workers.runtime.s3 import (
     ObjectStoreCapacityError,
     ObjectStoreOperationError,
 )
+from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
+from graphx_workers.sources.fixture import FixtureAdapter
 
 NOW = datetime(2026, 11, 20, tzinfo=UTC)
 
@@ -286,6 +304,242 @@ async def chunks(*values: bytes) -> AsyncIterator[bytes]:
     for value in values:
         await asyncio.sleep(0)
         yield value
+
+
+@pytest.mark.asyncio
+async def test_runtime_context_factory_recovers_attempt_artifacts() -> None:
+    client = MemoryS3Client()
+    store = ImmutableS3Store(client, "artifacts", require_versioning=False)
+    job_id = uuid4()
+    first = ArtifactSession(
+        store,
+        job_id=job_id,
+        attempt_no=1,
+        max_bytes=1024,
+        spool_max_memory_bytes=16,
+        allowed_media_types=frozenset({"application/json"}),
+    )
+    expected = await first.save(
+        b'{"source":"fixture"}',
+        "application/json",
+        local_ref="artifact:raw:fixture-response",
+        kind="raw_response",
+        source_uri="https://fixture.invalid/responses/success",
+        retrieved_at=NOW,
+    )
+
+    context = await ArtifactContextFactory(
+        store,
+        WorkerSettings(
+            artifact_max_bytes=4096,
+            artifact_spool_max_memory_bytes=16,
+            artifact_allowed_media_types="application/json",
+            source_result_inline_max_bytes=4096,
+            source_result_manifest_max_bytes=4096,
+        ),
+        logging.getLogger(__name__),
+    ).create(
+        job_id=job_id,
+        attempt_no=1,
+        correlation_id=uuid4(),
+        deadline=NOW + timedelta(minutes=1),
+    )
+
+    assert context.saved_artifacts == (expected,)
+    assert b"".join([chunk async for chunk in context.download_artifact(expected)]) == (
+        b'{"source":"fixture"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_manifest_recovers_after_put_and_reconciles_without_overwrite() -> None:
+    client = MemoryS3Client()
+    store = ImmutableS3Store(client, "artifacts", require_versioning=False)
+    settings = WorkerSettings(
+        artifact_max_bytes=4096,
+        artifact_spool_max_memory_bytes=16,
+        artifact_allowed_media_types="application/json",
+        source_result_inline_max_bytes=4096,
+        source_result_manifest_max_bytes=4096,
+    )
+    factory = ArtifactContextFactory(store, settings, logging.getLogger(__name__))
+    job_id = uuid4()
+    first = await factory.create(
+        job_id=job_id,
+        attempt_no=1,
+        correlation_id=uuid4(),
+        deadline=NOW + timedelta(minutes=1),
+    )
+    await first.save_artifact(
+        b'{"source":"fixture"}',
+        "application/json",
+        local_ref="artifact:raw:1",
+        kind="raw_response",
+        source_uri="https://example.test/fixture/1",
+        retrieved_at=NOW,
+    )
+    manifest_bytes = b'{"schema_version":1,"records":[],"claims":[]}'
+    manifest = await first.save_manifest(
+        chunks(manifest_bytes),
+        local_ref="artifact:manifest:source-result:v1",
+        source_uri="https://example.test/fixture/1",
+        retrieved_at=NOW,
+        max_bytes=4096,
+    )
+
+    restarted = await factory.create(
+        job_id=job_id,
+        attempt_no=1,
+        correlation_id=uuid4(),
+        deadline=NOW + timedelta(minutes=1),
+    )
+    assert manifest in restarted.saved_artifacts
+    reconciled = await restarted.save_manifest(
+        chunks(manifest_bytes),
+        local_ref="artifact:manifest:source-result:v1",
+        source_uri="https://example.test/fixture/1",
+        retrieved_at=NOW,
+        max_bytes=4096,
+    )
+    assert reconciled == manifest
+
+    with pytest.raises(ObjectConflictError):
+        await restarted.save_manifest(
+            chunks(manifest_bytes + b" "),
+            local_ref="artifact:manifest:source-result:v1",
+            source_uri="https://example.test/fixture/1",
+            retrieved_at=NOW,
+            max_bytes=4096,
+        )
+    assert client.objects[manifest.object_key][0] == manifest_bytes
+
+
+@pytest.mark.asyncio
+async def test_concurrent_manifest_finalization_reconciles_identical_bytes() -> None:
+    client = MemoryS3Client()
+    store = ImmutableS3Store(client, "artifacts", require_versioning=False)
+    settings = WorkerSettings(
+        artifact_max_bytes=4096,
+        artifact_spool_max_memory_bytes=16,
+        artifact_allowed_media_types="application/json",
+        source_result_inline_max_bytes=4096,
+        source_result_manifest_max_bytes=4096,
+    )
+    factory = ArtifactContextFactory(store, settings, logging.getLogger(__name__))
+    job_id = uuid4()
+    contexts = await asyncio.gather(
+        *(
+            factory.create(
+                job_id=job_id,
+                attempt_no=1,
+                correlation_id=uuid4(),
+                deadline=NOW + timedelta(minutes=1),
+            )
+            for _ in range(2)
+        )
+    )
+    content = b'{"schema_version":1,"records":[],"claims":[]}'
+
+    references = await asyncio.gather(
+        *(
+            context.save_manifest(
+                chunks(content),
+                local_ref="artifact:manifest:source-result:v1",
+                source_uri="https://example.test/fixture/1",
+                retrieved_at=NOW,
+                max_bytes=4096,
+            )
+            for context in contexts
+        )
+    )
+
+    assert references[0] == references[1]
+    assert len(client.objects) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_restart_after_manifest_put_rebuilds_same_terminal_result() -> None:
+    class CrashBeforeReplayStore(VolatileTerminalReplayStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempted_message: PreparedTerminalMessage | None = None
+
+        async def put_if_absent(
+            self,
+            command_id: UUID,
+            command_fingerprint: str,
+            message: PreparedTerminalMessage,
+        ) -> StoredTerminalMessage:
+            del command_id, command_fingerprint
+            self.attempted_message = message
+            raise RuntimeError("simulated crash before replay commit")
+
+    client = MemoryS3Client()
+    store = ImmutableS3Store(client, "artifacts", require_versioning=False)
+    settings = WorkerSettings(
+        artifact_max_bytes=1024 * 1024,
+        artifact_spool_max_memory_bytes=1024,
+        source_result_manifest_max_bytes=1024 * 1024,
+    )
+    registry = ContractSchemaRegistry(Path(__file__).resolve().parents[2] / "contracts" / "schemas")
+    command_id = uuid4()
+    command = SourceCollectRequested(
+        message_id=command_id,
+        type="source.collect.requested.v1",
+        schema_version=1,
+        occurred_at=NOW,
+        correlation_id=uuid4(),
+        causation_id=None,
+        producer="graphx-test",
+        root_command_id=command_id,
+        payload=SourceCollectRequestedPayload(
+            job_id=uuid4(),
+            attempt_no=1,
+            investigation_id=uuid4(),
+            source="fixture",
+            operation="search_subject",
+            purpose="subject_discovery",
+            query=SourceQuery(
+                type="person",
+                name="Crash Recovery",
+                identifiers={"fixture_case": "success"},
+            ),
+            limits=CollectLimits(max_records=10, max_bytes=1024, timeout_seconds=30),
+            deadline=NOW + timedelta(minutes=1),
+        ),
+    )
+    raw = command.model_dump_json().encode()
+
+    def runtime(replay: VolatileTerminalReplayStore) -> SourceCommandProcessor:
+        return SourceCommandProcessor(
+            registry,
+            TerminalMessageFactory(registry, clock=lambda: NOW + timedelta(seconds=1)),
+            replay,
+            ArtifactContextFactory(store, settings, logging.getLogger(__name__)),
+            (AdapterRegistration(adapter=FixtureAdapter()),),
+            job_timeout=timedelta(minutes=1),
+            result_finalizer=ManifestResultFinalizer(
+                registry,
+                inline_max_bytes=1,
+                manifest_max_bytes=settings.source_result_manifest_max_bytes,
+            ),
+            clock=lambda: NOW,
+        )
+
+    crashing_replay = CrashBeforeReplayStore()
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        await runtime(crashing_replay).prepare(raw)
+    assert len(client.objects) == 2
+
+    prepared = await runtime(VolatileTerminalReplayStore()).prepare(raw)
+    message = parse_source_message(decode_contract_json(prepared.body))
+
+    assert isinstance(message, SourceCollectCompleted)
+    assert crashing_replay.attempted_message is not None
+    assert prepared.body == crashing_replay.attempted_message.body
+    assert message.payload.manifest is not None
+    assert len(client.objects) == 2
+    assert {artifact.kind for artifact in message.payload.artifacts} == {"raw_response"}
 
 
 @pytest.mark.asyncio

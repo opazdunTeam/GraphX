@@ -143,11 +143,20 @@ GET/read/close выполняются одним владеющим daemon worke
 сохраняются через `AdapterContext.save_artifact` до parsing/mapping. Fixture не содержит реальных
 персональных данных и не обращается к RabbitMQ, PostgreSQL или object storage напрямую.
 
-Production registry источников остаётся пуст до инфраструктурного среза #19: валидная команда
-получает стабильный `SOURCE_UNSUPPORTED_OPERATION`, а не остаётся незавершённой. Подключение
-fixture-адаптера к immutable artifact storage и manifest finalizer выполняется там же; transport
-runtime не получает доступ к PostgreSQL. Document и browser entrypoints пока остаются явными
-scaffold-процессами.
+Production registry source worker включает fixture-адаптер. Runtime создаёт для попытки
+MinIO-backed context, восстанавливает ранее сохранённые objects и сверяет возвращённые адаптером
+ссылки с зарегистрированными artifacts. `SOURCE_RESULT_INLINE_MAX_BYTES` задаёт предварительный
+порог тела `SourceResult`, после которого runtime дополнительно проверяет полный terminal envelope
+в точном replay-формате. Крупный успешный результат потоково сохраняется как JSON manifest под
+детерминированным immutable key; `SOURCE_RESULT_MANIFEST_MAX_BYTES` ограничивает его 16 MiB и не
+может быть ниже inline threshold. Отдельный terminal payload limit применяется до JCS digest и
+защищает также inline `not_found` и warnings manifest-результата. Scalar/node limits применяются к окончательному содержимому вместе
+с recovered artifacts до reconciliation и повторно после него, а source-only concurrency-aware
+serialization budget ограничивает временную память процесса. Source-конфигурация обязана разрешать `application/json`
+для runtime manifest. RabbitMQ получает только manifest reference, исходные artifact references и версии обработки.
+`not_found` всегда остаётся inline. Transport runtime не получает доступ к
+PostgreSQL; регистрация результата принадлежит Go consumer. Document и browser entrypoints пока
+остаются явными scaffold-процессами.
 
 Production image собирается из корня репозитория, чтобы сохранить единый источник JSON Schema:
 
@@ -155,6 +164,6 @@ Production image собирается из корня репозитория, ч
 docker build -f workers/Dockerfile .
 ```
 
-Production image устанавливает runtime и все транзитивные зависимости через `uv sync --locked --no-dev` из committed `uv.lock`. `tools/integrationtest.py` поднимает изолированные RabbitMQ и MinIO, собирает этот image, проводит через контейнер реальный command→failed-result flow, а затем проверяет confirm/ACK, broker NACK, физический разрыв AMQP-соединения до confirm, concurrency, graceful shutdown, immutable streaming upload/download, concurrent retry, conflict, recovery и обязательное versioning. После проверки контейнеры, сеть и volume удаляются. Обычный `pytest` пропускает infrastructure-тесты без `RABBITMQ_TEST_URL` и `MINIO_TEST_URL`.
+Production image устанавливает runtime и все транзитивные зависимости через `uv sync --locked --no-dev` из committed `uv.lock`. `tools/integrationtest.py` поднимает изолированные RabbitMQ и MinIO, собирает этот image, проводит через контейнер реальный command→manifest-result flow, проверяет stored original, manifest schema/semantics и exact duplicate replay, а затем проверяет confirm/ACK, broker NACK, физический разрыв AMQP-соединения до confirm, concurrency, graceful shutdown, immutable streaming upload/download, concurrent retry, conflict, recovery и обязательное versioning. После проверки контейнеры, сеть и volume удаляются. Обычный `pytest` пропускает infrastructure-тесты без `RABBITMQ_TEST_URL` и `MINIO_TEST_URL`.
 
 См. [контракт адаптера](../docs/10-source-adapters.md) и [сообщения RabbitMQ](../docs/09-messaging.md).

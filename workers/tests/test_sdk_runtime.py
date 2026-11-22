@@ -1,9 +1,11 @@
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+import rfc8785
 from pydantic import AnyUrl, ValidationError
 
 from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
@@ -22,9 +24,14 @@ from graphx_workers.contracts.results import (
 )
 from graphx_workers.runtime.requests import to_collect_request
 from graphx_workers.runtime.results import (
+    ManifestTooLargeError,
+    ResultTooComplexError,
     build_inline_source_result,
     build_manifest_source_result,
+    finalize_inline_source_result,
+    prepare_inline_source_result,
     prepare_manifest,
+    validate_result_serialization_limits,
 )
 from graphx_workers.sdk import AdapterMetadata, CollectRequest, CollectResult
 
@@ -194,17 +201,19 @@ def test_artifact_parent_references_are_resolved_and_acyclic() -> None:
         CollectResult(**{**collected.model_dump(), "artifacts": [cyclic_parent, cyclic_child]})
 
 
-def test_runtime_owns_manifest_serialization_and_finalization() -> None:
+@pytest.mark.asyncio
+async def test_runtime_owns_manifest_serialization_and_finalization() -> None:
     job_id = uuid4()
     collected = collected_result(job_id)
-    prepared = prepare_manifest(job_id, 1, collected)
+    prepared = prepare_manifest(job_id, 1, collected, max_bytes=1024 * 1024)
+    content = b"".join([chunk async for chunk in prepared.iter_bytes()])
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
         object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
-        sha256=sha256(prepared.content).hexdigest(),
+        sha256=sha256(content).hexdigest(),
         media_type="application/json",
-        byte_size=len(prepared.content),
+        byte_size=len(content),
         source_uri=AnyUrl("https://example.test/subject/1"),
         retrieved_at=datetime.now(UTC),
         published_at=None,
@@ -213,22 +222,24 @@ def test_runtime_owns_manifest_serialization_and_finalization() -> None:
 
     result = build_manifest_source_result(job_id, 1, collected, prepared, reference)
     validate_source_result_semantics(result)
-    validate_manifest_semantics(result, prepared.document, prepared.content)
+    validate_manifest_semantics(result, prepared.document, content)
     assert not result.records
     assert not result.claims
 
 
-def test_manifest_finalization_rejects_a_different_collection_with_same_count() -> None:
+@pytest.mark.asyncio
+async def test_manifest_finalization_rejects_a_different_collection_with_same_count() -> None:
     job_id = uuid4()
     original = collected_result(job_id)
-    prepared = prepare_manifest(job_id, 1, original)
+    prepared = prepare_manifest(job_id, 1, original, max_bytes=1024 * 1024)
+    content = b"".join([chunk async for chunk in prepared.iter_bytes()])
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
         object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
-        sha256=sha256(prepared.content).hexdigest(),
+        sha256=sha256(content).hexdigest(),
         media_type="application/json",
-        byte_size=len(prepared.content),
+        byte_size=len(content),
         source_uri=AnyUrl("https://example.test/subject/1"),
         retrieved_at=datetime.now(UTC),
         published_at=None,
@@ -240,6 +251,49 @@ def test_manifest_finalization_rejects_a_different_collection_with_same_count() 
     with pytest.raises(ValueError, match="does not belong"):
         build_manifest_source_result(job_id, 1, different, prepared, reference)
 
-    tampered = prepared.__class__(document=prepared.document, content=prepared.content + b" ")
-    with pytest.raises(ValueError, match="does not belong"):
-        build_manifest_source_result(job_id, 1, original, tampered, reference)
+    tampered_reference = reference.model_copy(update={"sha256": "f" * 64})
+    with pytest.raises(ValueError, match="sha256"):
+        build_manifest_source_result(job_id, 1, original, prepared, tampered_reference)
+
+
+@pytest.mark.asyncio
+async def test_manifest_stream_enforces_its_dedicated_byte_limit() -> None:
+    prepared = prepare_manifest(JOB_ID, 1, collected_result(), max_bytes=16)
+
+    with pytest.raises(ManifestTooLargeError, match="configured byte limit"):
+        b"".join([chunk async for chunk in prepared.iter_bytes()])
+
+
+def test_result_serialization_rejects_excessive_aggregate_scalar_content() -> None:
+    collected = collected_result()
+    collected.records[0].raw_data = {"first": "a" * 64, "second": "b" * 64}
+
+    with pytest.raises(ResultTooComplexError, match="total scalar character limit"):
+        validate_result_serialization_limits(
+            collected,
+            max_scalar_chars=2048,
+            max_total_scalar_chars=100,
+            max_json_nodes=1000,
+        )
+
+
+def test_jcs_digest_handles_number_longer_than_compact_python_json() -> None:
+    collected = collected_result()
+    collected.records[0].raw_data["large_number"] = 1e20
+    candidate = prepare_inline_source_result(JOB_ID, 1, collected)
+    terminal_payload = candidate.model_dump(mode="json")
+    compact = json.dumps(
+        terminal_payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode()
+    digest_payload = dict(terminal_payload)
+    digest_payload.pop("digest")
+    canonical = rfc8785.dumps(digest_payload)
+
+    assert b"1e+20" in compact
+    assert b"100000000000000000000" in canonical
+
+    result = finalize_inline_source_result(candidate, max_bytes=len(compact))
+    validate_source_result_semantics(result)

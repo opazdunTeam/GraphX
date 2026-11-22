@@ -174,11 +174,26 @@ def validate_source_result_semantics(
 def validate_manifest_semantics(
     result: SourceResult, manifest: SourceResultManifest, stored_bytes: bytes
 ) -> None:
+    validate_manifest_reference_semantics(
+        result,
+        manifest,
+        byte_size=len(stored_bytes),
+        sha256_value=sha256(stored_bytes).hexdigest(),
+    )
+
+
+def validate_manifest_reference_semantics(
+    result: SourceResult,
+    manifest: SourceResultManifest,
+    *,
+    byte_size: int,
+    sha256_value: str,
+) -> None:
+    """Validate manifest metadata when trusted storage computed size and digest."""
     reference = result.manifest
     if reference is None:
         raise ValueError("manifest validation requires a manifest result")
-    hash_mismatch = reference.sha256 != sha256(stored_bytes).hexdigest()
-    if reference.byte_size != len(stored_bytes) or hash_mismatch:
+    if reference.byte_size != byte_size or reference.sha256 != sha256_value:
         raise ValueError("manifest hash or byte size does not match stored bytes")
     if (result.job_id, result.attempt_no, result.record_count) != (
         manifest.job_id,

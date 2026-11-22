@@ -9,6 +9,16 @@ from typing import Any, Literal, Self
 from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_MAX_SOURCE_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_SOURCE_RESULT_SCALAR_CHARS = 1024 * 1024
+_MAX_SOURCE_RESULT_JSON_NODES = 100_000
+_SOURCE_SERIALIZATION_MEMORY_BUDGET_BYTES = 64 * 1024 * 1024
+_JSON_TOKEN_ALLOCATION_FACTOR = 12
+_JSON_NODE_ALLOCATION_ESTIMATE_BYTES = 256
+_JSON_SCALAR_STORAGE_FACTOR = 4
+_JCS_ALLOCATION_FACTOR = 2
+DEFAULT_SOURCE_RESULT_MAX_TOTAL_SCALAR_CHARS = 1024 * 1024
+
 
 class WorkerKind(StrEnum):
     SOURCE = "source"
@@ -44,6 +54,12 @@ class WorkerSettings(BaseSettings):
     terminal_replay_max_entries: PositiveInt = 100_000
     terminal_replay_max_bytes: PositiveInt = 10 * 1024 * 1024 * 1024
     terminal_replay_max_entry_bytes: PositiveInt = 2 * 1024 * 1024
+    source_result_inline_max_bytes: PositiveInt = 512 * 1024
+    source_result_terminal_max_bytes: PositiveInt = 1024 * 1024
+    source_result_manifest_max_bytes: PositiveInt = 16 * 1024 * 1024
+    source_result_max_scalar_chars: PositiveInt = 256 * 1024
+    source_result_max_total_scalar_chars: PositiveInt = DEFAULT_SOURCE_RESULT_MAX_TOTAL_SCALAR_CHARS
+    source_result_max_json_nodes: PositiveInt = 20_000
     s3_endpoint: str | None = None
     s3_region: str = "local"
     s3_bucket_artifacts: str | None = None
@@ -106,6 +122,12 @@ class WorkerSettings(BaseSettings):
             "rabbitmq_configured": self.rabbitmq_url is not None,
             "object_store_configured": all((self.s3_endpoint, self.s3_bucket_artifacts)),
             "object_store_requires_versioning": self.s3_require_versioning,
+            "inline_result_max_bytes": self.source_result_inline_max_bytes,
+            "terminal_result_max_bytes": self.source_result_terminal_max_bytes,
+            "manifest_max_bytes": self.source_result_manifest_max_bytes,
+            "result_max_scalar_chars": self.source_result_max_scalar_chars,
+            "result_max_total_scalar_chars": self.source_result_max_total_scalar_chars,
+            "result_max_json_nodes": self.source_result_max_json_nodes,
         }
 
     @model_validator(mode="after")
@@ -151,9 +173,67 @@ class WorkerSettings(BaseSettings):
             raise ValueError("ARTIFACT_SPOOL_MAX_MEMORY_BYTES cannot exceed ARTIFACT_MAX_BYTES")
         if self.artifact_max_bytes > 5 * 1024 * 1024 * 1024:
             raise ValueError("ARTIFACT_MAX_BYTES cannot exceed the S3 PutObject limit")
-        if not self.allowed_artifact_media_types():
+        allowed_media_types = self.allowed_artifact_media_types()
+        if not allowed_media_types:
             raise ValueError("ARTIFACT_ALLOWED_MEDIA_TYPES must not be empty")
+        if self.worker_kind is WorkerKind.SOURCE:
+            self._validate_source_result_policy(allowed_media_types)
         return self
+
+    def _validate_source_result_policy(self, allowed_media_types: frozenset[str]) -> None:
+        if self.source_result_inline_max_bytes >= self.terminal_replay_max_entry_bytes:
+            raise ValueError(
+                "SOURCE_RESULT_INLINE_MAX_BYTES must be lower than TERMINAL_REPLAY_MAX_ENTRY_BYTES"
+            )
+        if self.source_result_terminal_max_bytes < self.source_result_inline_max_bytes:
+            raise ValueError(
+                "SOURCE_RESULT_TERMINAL_MAX_BYTES cannot be lower than "
+                "SOURCE_RESULT_INLINE_MAX_BYTES"
+            )
+        if self.source_result_terminal_max_bytes >= self.terminal_replay_max_entry_bytes:
+            raise ValueError(
+                "SOURCE_RESULT_TERMINAL_MAX_BYTES must be lower than "
+                "TERMINAL_REPLAY_MAX_ENTRY_BYTES"
+            )
+        if self.source_result_manifest_max_bytes < max(4096, self.source_result_inline_max_bytes):
+            raise ValueError(
+                "SOURCE_RESULT_MANIFEST_MAX_BYTES must be at least 4096 bytes and not "
+                "lower than SOURCE_RESULT_INLINE_MAX_BYTES"
+            )
+        if self.source_result_manifest_max_bytes > self.artifact_max_bytes:
+            raise ValueError("SOURCE_RESULT_MANIFEST_MAX_BYTES cannot exceed ARTIFACT_MAX_BYTES")
+        if self.source_result_manifest_max_bytes > _MAX_SOURCE_MANIFEST_BYTES:
+            raise ValueError("SOURCE_RESULT_MANIFEST_MAX_BYTES cannot exceed 16777216 bytes")
+        if self.source_result_max_scalar_chars > _MAX_SOURCE_RESULT_SCALAR_CHARS:
+            raise ValueError("SOURCE_RESULT_MAX_SCALAR_CHARS cannot exceed 1048576 characters")
+        if self.source_result_max_total_scalar_chars > _MAX_SOURCE_MANIFEST_BYTES:
+            raise ValueError(
+                "SOURCE_RESULT_MAX_TOTAL_SCALAR_CHARS cannot exceed 16777216 characters"
+            )
+        if self.source_result_max_json_nodes > _MAX_SOURCE_RESULT_JSON_NODES:
+            raise ValueError("SOURCE_RESULT_MAX_JSON_NODES cannot exceed 100000")
+        per_worker_serialization_budget = (
+            _JSON_TOKEN_ALLOCATION_FACTOR * self.source_result_max_scalar_chars
+            + _JSON_SCALAR_STORAGE_FACTOR * self.source_result_max_total_scalar_chars
+            + _JCS_ALLOCATION_FACTOR * self.source_result_terminal_max_bytes
+            + min(
+                self.artifact_spool_max_memory_bytes,
+                self.source_result_manifest_max_bytes,
+            )
+            + _JSON_NODE_ALLOCATION_ESTIMATE_BYTES * self.source_result_max_json_nodes
+        )
+        if (
+            per_worker_serialization_budget * self.worker_concurrency
+            > _SOURCE_SERIALIZATION_MEMORY_BUDGET_BYTES
+        ):
+            raise ValueError(
+                "source result serialization limits and WORKER_CONCURRENCY exceed "
+                "the 64 MiB process budget"
+            )
+        if "application/json" not in allowed_media_types:
+            raise ValueError(
+                "ARTIFACT_ALLOWED_MEDIA_TYPES must include application/json for source workers"
+            )
 
     def allowed_artifact_media_types(self) -> frozenset[str]:
         return frozenset(

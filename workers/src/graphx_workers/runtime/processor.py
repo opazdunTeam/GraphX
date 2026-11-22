@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -26,7 +26,10 @@ from graphx_workers.runtime.replay import (
     TerminalReplayStore,
 )
 from graphx_workers.runtime.requests import to_collect_request
-from graphx_workers.runtime.results import build_inline_source_result
+from graphx_workers.runtime.results import (
+    ResultSerializationLimitError,
+    build_inline_source_result,
+)
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
 from graphx_workers.sdk.adapter import (
     AdapterContext,
@@ -47,6 +50,16 @@ class RuntimeAdapterContext(AdapterContext, Protocol):
     @property
     def saved_artifacts(self) -> Sequence[ArtifactReference]: ...
 
+    async def save_manifest(
+        self,
+        content: AsyncIterable[bytes],
+        *,
+        local_ref: str,
+        source_uri: str,
+        retrieved_at: datetime,
+        max_bytes: int,
+    ) -> ArtifactReference: ...
+
 
 class AdapterContextFactory(Protocol):
     async def create(
@@ -65,6 +78,8 @@ class ResultFinalizer(Protocol):
         command: SourceCollectRequested,
         collected: CollectResult,
         context: RuntimeAdapterContext,
+        *,
+        force_manifest: bool = False,
     ) -> SourceResult: ...
 
 
@@ -74,8 +89,10 @@ class InlineResultFinalizer:
         command: SourceCollectRequested,
         collected: CollectResult,
         context: RuntimeAdapterContext,
+        *,
+        force_manifest: bool = False,
     ) -> SourceResult:
-        del context
+        del context, force_manifest
         return build_inline_source_result(
             command.payload.job_id,
             command.payload.attempt_no,
@@ -190,7 +207,7 @@ class SourceCommandProcessor:
                 self._validate_replay(command, stored.message)
                 return stored.message
 
-            outcome = await self._execute(command)
+            outcome = await self._execute(command, fingerprint)
             try:
                 stored = await self._replay_store.put_if_absent(
                     command.message_id,
@@ -233,7 +250,11 @@ class SourceCommandProcessor:
             raise InvalidCommandError("delivery is not a source collection command")
         return message
 
-    async def _execute(self, command: SourceCollectRequested) -> _ExecutionOutcome:
+    async def _execute(
+        self,
+        command: SourceCollectRequested,
+        fingerprint: str,
+    ) -> _ExecutionOutcome:
         registration = self._adapters.get(command.payload.source)
         if registration is None:
             return _ExecutionOutcome(
@@ -290,9 +311,22 @@ class SourceCommandProcessor:
                 if collected.adapter_version != registration.version:
                     raise ValueError("adapter result version does not match its metadata")
                 result = await self._result_finalizer.finalize(command, collected, context)
+                completed = self._terminal_factory.completed(command, result)
+                if (
+                    result.outcome == "succeeded"
+                    and result.manifest is None
+                    and not self._replay_store.entry_fits(fingerprint, completed)
+                ):
+                    result = await self._result_finalizer.finalize(
+                        command,
+                        collected,
+                        context,
+                        force_manifest=True,
+                    )
+                    completed = self._terminal_factory.completed(command, result)
             artifacts = self._artifacts(context)
             return _ExecutionOutcome(
-                message=self._terminal_factory.completed(command, result),
+                message=completed,
                 adapter_version=registration.version,
                 artifacts=artifacts,
             )
@@ -324,6 +358,21 @@ class SourceCommandProcessor:
             # A PUT may have committed even though its result is not observable yet.
             # Publishing a terminal receipt here could orphan immutable evidence.
             raise
+        except ResultSerializationLimitError:
+            artifacts = self._artifacts(context)
+            return _ExecutionOutcome(
+                message=self._terminal_factory.failed(
+                    command,
+                    adapter_version=registration.version,
+                    artifacts=artifacts,
+                    error=AdapterError(
+                        ErrorCode.CONTRACT_VALIDATION_FAILED,
+                        "source result exceeds configured serialization limits",
+                    ),
+                ),
+                adapter_version=registration.version,
+                artifacts=artifacts,
+            )
         except Exception:
             self._logger.exception(
                 "source adapter failed unexpectedly",

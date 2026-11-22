@@ -109,7 +109,7 @@ def main() -> int:
             (
                 "from pathlib import Path; "
                 "root=Path('/var/lib/graphx/worker-replay'); "
-                "assert len(tuple(root.glob('[0-9a-f]*.json'))) == 1"
+                "assert len(tuple(root.glob('[0-9a-f]*.json'))) == 2"
             ),
         )
         run(*compose, "--profile", "image-smoke", "stop", "source-worker-smoke")
