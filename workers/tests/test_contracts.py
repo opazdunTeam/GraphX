@@ -2,7 +2,7 @@ import copy
 import json
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import pytest
@@ -17,14 +17,20 @@ from graphx_workers.contracts.messages import (
     SourceQuery,
     parse_source_message,
 )
+from graphx_workers.contracts.records import SourceRecord
 from graphx_workers.contracts.results import (
+    SourceResult,
     SourceResultManifest,
     compute_source_result_digest,
     validate_manifest_semantics,
     validate_result_content,
     validate_source_result_semantics,
 )
-from graphx_workers.contracts.schema import ContractSchemaRegistry, decode_contract_json
+from graphx_workers.contracts.schema import (
+    ContractSchemaRegistry,
+    decode_contract_json,
+    validate_raw_locator_numbers,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = ROOT / "contracts" / "examples"
@@ -78,6 +84,348 @@ def test_source_query_round_trip_omits_absent_optional_keys(
 
     assert serialized["payload"]["query"] == query
     registry.validate_message(serialized)
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        {"json_pointer": ""},
+        {"json_pointer": "/people/0/name~1display"},
+        {"json_pointer": "/name", "column": "name"},
+        {"csv_row": 2},
+        {"csv_row": 2.0},
+        {"csv_row": 9_007_199_254_740_991},
+        {"page_number": 3},
+        {"page_number": 3.0},
+        {"fragment": "section-2"},
+        {"page_number": 3, "fragment": "table 1"},
+        {"page_number": 3, "section": "appendix"},
+    ],
+)
+def test_claim_accepts_portable_evidence_locators(locator: dict[str, Any]) -> None:
+    claim = Claim(
+        claim_kind="attribute",
+        subject_local_ref="record:1",
+        predicate="name",
+        raw_value="Example",
+        evidence_locator=locator,
+    )
+
+    assert claim.evidence_locator == locator
+
+
+@pytest.mark.parametrize("number", ["2", "2.0", "2e0", "9007199254740991"])
+def test_claim_accepts_equivalent_safe_integer_json_representations(number: str) -> None:
+    claim = Claim.model_validate_json(
+        '{"claim_kind":"attribute","subject_local_ref":"record:1",'
+        '"predicate":"name","raw_value":"Example","evidence_locator":'
+        f'{{"csv_row":{number}}}}}'
+    )
+
+    assert claim.evidence_locator["csv_row"] == float(number)
+
+
+@pytest.mark.parametrize(
+    "number",
+    ["0", "1.5", "1.00000000000000001", "1e20", "9007199254740992"],
+)
+def test_claim_rejects_unsafe_integer_json_representations(number: str) -> None:
+    with pytest.raises(ValueError, match="exact safe integer"):
+        Claim.model_validate_json(
+            '{"claim_kind":"attribute","subject_local_ref":"record:1",'
+            '"predicate":"name","raw_value":"Example","evidence_locator":'
+            f'{{"csv_row":{number}}}}}'
+        )
+
+
+@pytest.mark.parametrize("number", ["2", "2.0", "2e0", "9007199254740991", "2.00e1"])
+def test_raw_locator_number_tokens_preserve_valid_decimal_semantics(number: str) -> None:
+    validate_raw_locator_numbers(
+        f'{{"claims":[{{"evidence_locator":{{"csv_row":{number}}}}}]}}'.encode()
+    )
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        "0",
+        "1.5",
+        "1.00000000000000001",
+        "9007199254740991.1",
+        "9007199254740992",
+        "1e20",
+        "-1",
+        "1e-1",
+    ],
+)
+def test_raw_locator_number_tokens_reject_fractional_or_unsafe_values(number: str) -> None:
+    with pytest.raises(ValueError, match="exact safe integer"):
+        validate_raw_locator_numbers(
+            f'{{"claims":[{{"evidence_locator":{{"page_number":{number}}}}}]}}'.encode()
+        )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "messages/source-collect-completed.v1.json",
+        "ingestion/source-result-manifest.v1.json",
+    ],
+)
+def test_registry_rejects_inexact_locator_tokens_at_raw_entry_points(
+    registry: ContractSchemaRegistry, relative_path: str
+) -> None:
+    raw = (
+        (EXAMPLES / relative_path)
+        .read_text()
+        .replace('"json_pointer": "/name"', '"csv_row": 1.00000000000000001')
+    )
+
+    with pytest.raises(ValueError, match="exact safe integer"):
+        if relative_path.startswith("messages/"):
+            registry.validate_message_json(raw)
+        else:
+            registry.validate_manifest_json(raw)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "messages/source-collect-completed.v1.json",
+        "ingestion/source-result-manifest.v1.json",
+    ],
+)
+@pytest.mark.parametrize("number", ["1.00000000000000001", "9007199254740992.0"])
+def test_registry_rejects_inexact_record_count_tokens_at_raw_entry_points(
+    registry: ContractSchemaRegistry, relative_path: str, number: str
+) -> None:
+    raw = (
+        (EXAMPLES / relative_path)
+        .read_text()
+        .replace('"record_count": 1', f'"record_count": {number}', 1)
+    )
+
+    with pytest.raises((ValueError, SchemaValidationError), match="record_count"):
+        if relative_path.startswith("messages/"):
+            registry.validate_message_json(raw)
+        else:
+            registry.validate_manifest_json(raw)
+
+
+def test_source_result_json_rejects_inexact_nested_locator_token() -> None:
+    result = SourceCollectCompleted.model_validate(
+        load_json("messages/source-collect-completed.v1.json")
+    ).payload
+    raw = result.model_dump_json().replace(
+        '"json_pointer":"/name"', '"csv_row":1.00000000000000001'
+    )
+
+    with pytest.raises(ValueError, match="exact safe integer"):
+        SourceResult.model_validate_json(raw)
+
+
+def test_manifest_json_rejects_inexact_nested_locator_token() -> None:
+    manifest = SourceResultManifest.model_validate(
+        load_json("ingestion/source-result-manifest.v1.json")
+    )
+    raw = manifest.model_dump_json().replace(
+        '"json_pointer":"/name"', '"page_number":1.00000000000000001'
+    )
+
+    with pytest.raises(ValueError, match="exact safe integer"):
+        SourceResultManifest.model_validate_json(raw)
+
+
+@pytest.mark.parametrize("number", ["1", "1.0", "1e0"])
+def test_result_models_accept_exact_record_count_tokens(number: str) -> None:
+    result = SourceCollectCompleted.model_validate(
+        load_json("messages/source-collect-completed.v1.json")
+    ).payload
+    result_raw = result.model_dump_json().replace('"record_count":1', f'"record_count":{number}')
+    assert SourceResult.model_validate_json(result_raw).record_count == 1
+
+    manifest = SourceResultManifest.model_validate(
+        load_json("ingestion/source-result-manifest.v1.json")
+    )
+    manifest_raw = manifest.model_dump_json().replace(
+        '"record_count":1', f'"record_count":{number}'
+    )
+    assert SourceResultManifest.model_validate_json(manifest_raw).record_count == 1
+
+
+@pytest.mark.parametrize(
+    "number",
+    ["-1", "1.5", "1.00000000000000001", "9007199254740992", '"1"', "true", "null"],
+)
+def test_result_models_reject_inexact_record_count_tokens(number: str) -> None:
+    document = SourceCollectCompleted.model_validate(
+        load_json("messages/source-collect-completed.v1.json")
+    )
+    result_raw = document.payload.model_dump_json().replace(
+        '"record_count":1', f'"record_count":{number}'
+    )
+    envelope_raw = document.model_dump_json().replace(
+        '"record_count":1', f'"record_count":{number}'
+    )
+
+    with pytest.raises(ValueError, match="exact non-negative safe integer"):
+        SourceResult.model_validate_json(result_raw)
+    with pytest.raises(ValueError, match="exact non-negative safe integer"):
+        SourceCollectCompleted.model_validate_json(envelope_raw)
+
+    manifest = SourceResultManifest.model_validate(
+        load_json("ingestion/source-result-manifest.v1.json")
+    )
+    manifest_raw = manifest.model_dump_json().replace(
+        '"record_count":1', f'"record_count":{number}'
+    )
+    with pytest.raises(ValueError, match="exact non-negative safe integer"):
+        SourceResultManifest.model_validate_json(manifest_raw)
+
+
+@pytest.mark.parametrize("claim_kind", ["attribute", "event"])
+@pytest.mark.parametrize("value", [[], {}, "", "\u0007", "\u001c", "\u001f", "\u007f", "\u0080"])
+def test_claim_rejects_values_without_meaning(
+    claim_kind: Literal["attribute", "event"], value: Any
+) -> None:
+    with pytest.raises(ValidationError, match="meaningful value"):
+        Claim(
+            claim_kind=claim_kind,
+            subject_local_ref="record:1",
+            predicate="name",
+            raw_value=value,
+            normalized_value=None,
+            evidence_locator={"json_pointer": "/name"},
+        )
+
+
+@pytest.mark.parametrize("value", [False, 0])
+def test_claim_accepts_meaningful_falsey_scalars(value: Any) -> None:
+    claim = Claim(
+        claim_kind="attribute",
+        subject_local_ref="record:1",
+        predicate="active",
+        raw_value=value,
+        normalized_value=None,
+        evidence_locator={"json_pointer": "/active"},
+    )
+
+    assert claim.raw_value == value
+
+
+def test_claim_accepts_text_mixed_with_control_characters() -> None:
+    claim = Claim(
+        claim_kind="attribute",
+        subject_local_ref="record:1",
+        predicate="name",
+        raw_value="Example\u0007",
+        normalized_value=None,
+        evidence_locator={"json_pointer": "/name"},
+    )
+
+    assert claim.raw_value == "Example\u0007"
+
+
+def test_direct_attribute_claim_rejects_object_reference() -> None:
+    with pytest.raises(ValidationError, match="cannot contain object_local_ref"):
+        Claim(
+            claim_kind="attribute",
+            subject_local_ref="record:1",
+            predicate="name",
+            object_local_ref="record:2",
+            raw_value="Example",
+            evidence_locator={"json_pointer": "/name"},
+        )
+
+
+@pytest.mark.parametrize("record_count", [True, "1", 9_007_199_254_740_992])
+def test_result_mapping_models_reject_invalid_record_count(record_count: Any) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"]["record_count"] = record_count
+    payload = document["payload"]
+    manifest = load_json("ingestion/source-result-manifest.v1.json")
+    manifest["record_count"] = record_count
+
+    with pytest.raises(ValidationError, match="exact non-negative safe integer"):
+        SourceResult.model_validate(payload)
+    with pytest.raises(ValidationError, match="exact non-negative safe integer"):
+        SourceCollectCompleted.model_validate(document)
+    with pytest.raises(ValidationError, match="exact non-negative safe integer"):
+        SourceResultManifest.model_validate(manifest)
+
+
+def test_result_mapping_models_accept_integral_float_record_count() -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"]["record_count"] = 1.0
+    manifest = load_json("ingestion/source-result-manifest.v1.json")
+    manifest["record_count"] = 1.0
+
+    assert SourceCollectCompleted.model_validate(document).payload.record_count == 1
+    assert SourceResultManifest.model_validate(manifest).record_count == 1
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "messages/source-collect-completed.v1.json",
+        "ingestion/source-result-manifest.v1.json",
+    ],
+)
+def test_raw_locator_scan_does_not_narrow_numbers_outside_locator(
+    registry: ContractSchemaRegistry, relative_path: str
+) -> None:
+    raw = (
+        (EXAMPLES / relative_path)
+        .read_text()
+        .replace('"raw_data": {', '"raw_data": {"extreme_zero": 0e9223372036854775807,', 1)
+    )
+
+    if relative_path.startswith("messages/"):
+        registry.validate_message_json(raw)
+    else:
+        registry.validate_manifest_json(raw)
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        {},
+        {"json_pointer": "people/0"},
+        {"json_pointer": "/bad~2escape"},
+        {"csv_row": 0},
+        {"csv_row": 1.5},
+        {"csv_row": float(9_007_199_254_740_992)},
+        {"page_number": -1},
+        {"page_number": None, "fragment": "section-2"},
+        {"fragment": ""},
+        {"fragment": " \t"},
+        {"fragment": "\u0007"},
+        {"fragment": "\u001c"},
+        {"fragment": "\u007f"},
+        {"page_number": 1, "fragment": None},
+        {"json_pointer": "/name", "csv_row": 1},
+        {"offset": 42},
+    ],
+)
+def test_claim_rejects_non_portable_evidence_locators(locator: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="evidence"):
+        Claim(
+            claim_kind="attribute",
+            subject_local_ref="record:1",
+            predicate="name",
+            raw_value="Example",
+            evidence_locator=locator,
+        )
+
+
+@pytest.mark.parametrize("field", ["subject_local_ref", "predicate", "object_local_ref"])
+@pytest.mark.parametrize("value", [" \t", "\u0007", "\u007f"])
+def test_claim_rejects_blank_persisted_reference_text(field: str, value: str) -> None:
+    claim = load_json("messages/source-collect-completed.v1.json")["payload"]["claims"][0]
+    claim[field] = value
+
+    with pytest.raises(ValidationError, match=r"blank|U\+0000"):
+        Claim.model_validate(claim)
 
 
 def test_completed_fixtures_pass_semantic_validation(registry: ContractSchemaRegistry) -> None:
@@ -264,6 +612,25 @@ def test_python_artifact_model_rejects_transport_values_outside_runtime_policy()
         ArtifactReference.model_validate(artifact)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("local_ref", " "),
+        ("local_ref", "\u0007"),
+        ("media_type", " "),
+        ("media_type", "\u007f"),
+        ("http_metadata", {"etag": "bad\x00value"}),
+        ("http_metadata", {b"etag": "first", "etag": "second"}),
+    ],
+)
+def test_python_artifact_model_rejects_postgres_incompatible_values(field: str, value: Any) -> None:
+    artifact = load_json("messages/source-collect-completed.v1.json")["payload"]["artifacts"][0]
+    artifact[field] = value
+
+    with pytest.raises(ValidationError, match=r"blank|U\+0000|object keys|pattern"):
+        ArtifactReference.model_validate(artifact)
+
+
 def test_artifact_contract_accepts_bracketed_ipv6_source_uri(
     registry: ContractSchemaRegistry,
 ) -> None:
@@ -409,6 +776,9 @@ def test_semantic_validation_rejects_invalid_cross_object_state(mutation: str) -
         document["payload"]["records"][0]["artifact_local_ref"] = "artifact:missing"
     else:
         document["payload"]["claims"][0]["object_local_ref"] = "person:1"
+        with pytest.raises(ValidationError, match="cannot contain object_local_ref"):
+            SourceCollectCompleted.model_validate(document)
+        return
     message = SourceCollectCompleted.model_validate(document)
     with pytest.raises(ValueError):
         validate_source_result_semantics(message.payload)
@@ -479,6 +849,155 @@ def test_semantic_validation_rejects_duplicate_records() -> None:
     result.records.append(result.records[0].model_copy(deep=True))
     with pytest.raises(ValueError, match="source record local_ref values must be unique"):
         validate_result_content(result.records, result.claims, result.artifacts)
+
+
+@pytest.mark.parametrize("mode", ["inline", "manifest"])
+def test_semantic_validation_rejects_mixed_schema_versions_per_artifact(mode: str) -> None:
+    if mode == "inline":
+        message = SourceCollectCompleted.model_validate(
+            load_json("messages/source-collect-completed.v1.json")
+        )
+        records = message.payload.records
+        claims = message.payload.claims
+        artifacts = message.payload.artifacts
+    else:
+        message = SourceCollectCompleted.model_validate(
+            load_json("messages/source-collect-completed-manifest.v1.json")
+        )
+        manifest = SourceResultManifest.model_validate(
+            load_json("ingestion/source-result-manifest.v1.json")
+        )
+        records = manifest.records
+        claims = manifest.claims
+        artifacts = message.payload.artifacts
+    conflicting = records[0].model_copy(
+        update={"local_ref": "record:conflicting", "schema_version": "schema/other"}
+    )
+
+    with pytest.raises(ValueError, match="one schema_version"):
+        validate_result_content([*records, conflicting], claims, artifacts)
+
+
+def test_semantic_validation_allows_different_schema_versions_between_artifacts() -> None:
+    message = SourceCollectCompleted.model_validate(
+        load_json("messages/source-collect-completed.v1.json")
+    )
+    result = message.payload
+    second_artifact = result.artifacts[0].model_copy(update={"local_ref": "artifact:raw:2"})
+    second_record = result.records[0].model_copy(
+        update={
+            "local_ref": "organization:2",
+            "artifact_local_ref": second_artifact.local_ref,
+            "schema_version": "fixture-organization/2",
+        }
+    )
+
+    validate_result_content(
+        [result.records[0], second_record],
+        result.claims,
+        [result.artifacts[0], second_artifact],
+    )
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    ["source-collect-completed.v1.json", "source-collect-completed-manifest.v1.json"],
+)
+def test_source_result_rejects_manifest_kind_in_source_artifacts(fixture: str) -> None:
+    document = load_json(f"messages/{fixture}")
+    payload = document["payload"]
+    payload["artifacts"][0]["kind"] = "manifest"
+    payload["digest"] = compute_source_result_digest(payload)
+    message = SourceCollectCompleted.model_validate(document)
+
+    with pytest.raises(ValueError, match="cannot use manifest kind"):
+        validate_source_result_semantics(message.payload, payload)
+
+
+@pytest.mark.parametrize(
+    "field", ["local_ref", "artifact_local_ref", "record_type", "external_id", "schema_version"]
+)
+@pytest.mark.parametrize("value", [" \t", "\u0007", "\u001c", "\u007f", "\u00a0", "v\x00x"])
+def test_source_record_rejects_invalid_persisted_text(field: str, value: str) -> None:
+    record = load_json("messages/source-collect-completed.v1.json")["payload"]["records"][0]
+    record[field] = value
+
+    with pytest.raises(ValidationError, match=r"blank|U\+0000"):
+        SourceRecord.model_validate(record)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["adapter_version", "parser_version", "mapping_version", "normalization_version"],
+)
+@pytest.mark.parametrize("value", [" \t", "\u0007", "\u001c", "\u007f", "\u00a0", "v\x00x"])
+def test_source_result_rejects_invalid_versions(field: str, value: str) -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"][field] = value
+
+    with pytest.raises(ValidationError, match="result versions"):
+        SourceCollectCompleted.model_validate(document)
+
+
+def test_persisted_text_and_fragment_accept_text_mixed_with_control() -> None:
+    document = load_json("messages/source-collect-completed.v1.json")
+    document["payload"]["parser_version"] = "parser\u0007v1"
+    document["payload"]["records"][0]["local_ref"] = "person\u0007:1"
+    document["payload"]["claims"][0]["subject_local_ref"] = "person\u0007:1"
+    document["payload"]["claims"][0]["evidence_locator"] = {"fragment": "section\u0007-1"}
+
+    message = SourceCollectCompleted.model_validate(document)
+
+    assert message.payload.parser_version == "parser\u0007v1"
+    assert message.payload.records[0].local_ref == "person\u0007:1"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("raw_data", {"nested": ["safe", "bad\x00value"]}),
+        ("raw_data", {"bad\x00key": "value"}),
+    ],
+)
+def test_source_record_rejects_postgres_incompatible_jsonb(field: str, value: Any) -> None:
+    record = load_json("messages/source-collect-completed.v1.json")["payload"]["records"][0]
+    record[field] = value
+
+    with pytest.raises(ValidationError, match="U\\+0000"):
+        SourceRecord.model_validate(record)
+
+
+def test_source_record_rejects_non_string_json_object_keys_before_coercion() -> None:
+    record = load_json("messages/source-collect-completed.v1.json")["payload"]["records"][0]
+    record["raw_data"] = {b"sample": "first", "sample": "second"}
+
+    with pytest.raises(ValidationError, match="object keys must be strings"):
+        SourceRecord.model_validate(record)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("raw_value", {"nested": "bad\x00value"}),
+        ("qualifiers", {"bad\x00key": True}),
+        ("evidence_locator", {"json_pointer": "/bad\x00value"}),
+        ("evidence_excerpt", "bad\x00value"),
+    ],
+)
+def test_claim_rejects_postgres_incompatible_values(field: str, value: Any) -> None:
+    claim = load_json("messages/source-collect-completed.v1.json")["payload"]["claims"][0]
+    claim[field] = value
+
+    with pytest.raises(ValidationError, match="U\\+0000"):
+        Claim.model_validate(claim)
+
+
+def test_claim_rejects_non_string_json_object_keys_before_coercion() -> None:
+    claim = load_json("messages/source-collect-completed.v1.json")["payload"]["claims"][0]
+    claim["qualifiers"] = {b"sample": "first", "sample": "second"}
+
+    with pytest.raises(ValidationError, match="object keys must be strings"):
+        Claim.model_validate(claim)
 
 
 @pytest.mark.parametrize("field", ["job_id", "attempt_no", "record_count"])

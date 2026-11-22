@@ -17,9 +17,9 @@ from graphx_workers.contracts.messages import (
     SourceCollectRequested,
     parse_source_message,
 )
-from graphx_workers.contracts.results import SourceResult
+from graphx_workers.contracts.results import SourceResult, validate_source_result_semantics
 from graphx_workers.contracts.schema import ContractSchemaRegistry
-from graphx_workers.runtime.errors import RuntimeInfrastructureUncertainError
+from graphx_workers.runtime.errors import RuntimeFatalError, RuntimeInfrastructureUncertainError
 from graphx_workers.runtime.replay import (
     ReplayEntryTooLargeError,
     StoredTerminalMessage,
@@ -29,6 +29,7 @@ from graphx_workers.runtime.requests import to_collect_request
 from graphx_workers.runtime.results import (
     ResultSerializationLimitError,
     build_inline_source_result,
+    reconcile_source_artifacts,
 )
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
 from graphx_workers.sdk.adapter import (
@@ -92,7 +93,8 @@ class InlineResultFinalizer:
         *,
         force_manifest: bool = False,
     ) -> SourceResult:
-        del context, force_manifest
+        del force_manifest
+        collected = reconcile_source_artifacts(collected, context.saved_artifacts)
         return build_inline_source_result(
             command.payload.job_id,
             command.payload.attempt_no,
@@ -439,17 +441,25 @@ class SourceCommandProcessor:
         command: SourceCollectRequested,
         prepared: PreparedTerminalMessage,
     ) -> None:
-        document = self._schema_registry.validate_message_json(prepared.body)
-        message = parse_source_message(document)
-        if not isinstance(message, SourceCollectCompleted | SourceCollectFailed):
-            raise ValueError("terminal replay entry does not contain a terminal result")
-        if (
-            message.message_id != prepared.message_id
-            or message.type != prepared.message_type
-            or message.correlation_id != prepared.correlation_id
-            or message.correlation_id != command.correlation_id
-            or message.causation_id != command.message_id
-            or message.payload.job_id != command.payload.job_id
-            or message.payload.attempt_no != command.payload.attempt_no
-        ):
-            raise ValueError("terminal replay entry does not match its source command")
+        try:
+            document = self._schema_registry.validate_message_json(prepared.body)
+            message = parse_source_message(document)
+            if not isinstance(message, SourceCollectCompleted | SourceCollectFailed):
+                raise ValueError("terminal replay entry does not contain a terminal result")
+            if isinstance(message, SourceCollectCompleted):
+                payload = document.get("payload")
+                if not isinstance(payload, Mapping):
+                    raise ValueError("terminal replay payload must be an object")
+                validate_source_result_semantics(message.payload, payload)
+            if (
+                message.message_id != prepared.message_id
+                or message.type != prepared.message_type
+                or message.correlation_id != prepared.correlation_id
+                or message.correlation_id != command.correlation_id
+                or message.causation_id != command.message_id
+                or message.payload.job_id != command.payload.job_id
+                or message.payload.attempt_no != command.payload.attempt_no
+            ):
+                raise ValueError("terminal replay entry does not match its source command")
+        except Exception as error:
+            raise RuntimeFatalError("stored terminal replay is invalid") from error

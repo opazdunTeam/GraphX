@@ -14,6 +14,8 @@ from graphx_workers.runtime.results import (
     finalize_inline_source_result,
     prepare_inline_source_result,
     prepare_manifest,
+    reconcile_source_artifacts,
+    revalidate_collect_result,
     validate_result_serialization_limits,
 )
 from graphx_workers.sdk import CollectResult
@@ -63,7 +65,8 @@ class ManifestResultFinalizer:
             max_total_scalar_chars=self._max_total_scalar_chars,
             max_json_nodes=self._max_json_nodes,
         )
-        reconciled = self._reconcile_source_artifacts(collected, context)
+        reconciled = reconcile_source_artifacts(collected, context.saved_artifacts)
+        reconciled = revalidate_collect_result(reconciled)
         validate_result_serialization_limits(
             reconciled,
             max_scalar_chars=self._max_scalar_chars,
@@ -137,26 +140,3 @@ class ManifestResultFinalizer:
             "claims": collected.claims,
             "warnings": collected.warnings,
         }
-
-    @staticmethod
-    def _reconcile_source_artifacts(
-        collected: CollectResult,
-        context: RuntimeAdapterContext,
-    ) -> CollectResult:
-        source_artifacts = sorted(
-            (artifact for artifact in context.saved_artifacts if artifact.kind != "manifest"),
-            key=lambda artifact: artifact.local_ref,
-        )
-        saved_by_ref = {artifact.local_ref: artifact for artifact in source_artifacts}
-        for artifact in collected.artifacts:
-            if saved_by_ref.get(artifact.local_ref) != artifact:
-                raise ValueError(
-                    "adapter returned an artifact not registered by its runtime context"
-                )
-        if source_artifacts == collected.artifacts:
-            return collected
-        document = collected.model_dump(mode="python")
-        document["artifacts"] = [
-            artifact.model_dump(mode="python") for artifact in source_artifacts
-        ]
-        return CollectResult.model_validate(document)

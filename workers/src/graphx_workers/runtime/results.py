@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -110,6 +110,7 @@ def prepare_manifest(
     """Prepare a schema-compatible, one-shot streamed manifest."""
     if max_bytes < 1:
         raise ValueError("manifest byte limit must be positive")
+    collected = revalidate_collect_result(collected)
     document = SourceResultManifest(
         schema_version=1,
         job_id=job_id,
@@ -216,7 +217,55 @@ def prepare_inline_source_result(
     collected: CollectResult,
 ) -> SourceResult:
     """Build a size-stable inline candidate without materializing its JCS digest input."""
+    collected = revalidate_collect_result(collected)
     return _build_source_result(job_id, attempt_no, collected, manifest=None)
+
+
+def revalidate_collect_result(collected: CollectResult) -> CollectResult:
+    # Read fields directly: model_dump warns with raw invalid values and may coerce them
+    # before validators can reject non-JSON objects or colliding object keys.
+    payload = _model_field_values(collected)
+    for field in ("artifacts", "records", "claims"):
+        values = payload.get(field)
+        if isinstance(values, list):
+            payload[field] = [
+                _model_field_values(value) if isinstance(value, BaseModel) else value
+                for value in values
+            ]
+    python_validated = CollectResult.model_validate(payload, strict=True)
+    return CollectResult.model_validate(python_validated.model_dump(mode="json"))
+
+
+def reconcile_source_artifacts(
+    collected: CollectResult,
+    saved_artifacts: Sequence[ArtifactReference],
+) -> CollectResult:
+    """Replace adapter-owned references with exact authoritative runtime snapshots."""
+    authoritative = [
+        ArtifactReference.model_validate(_model_field_values(reference), strict=True)
+        for reference in saved_artifacts
+    ]
+    source_artifacts = sorted(
+        (reference for reference in authoritative if reference.kind != "manifest"),
+        key=lambda reference: reference.local_ref,
+    )
+    saved_by_ref = {reference.local_ref: reference for reference in source_artifacts}
+    if len(saved_by_ref) != len(source_artifacts):
+        raise ValueError("artifact session contains duplicate source local_ref values")
+    for artifact in collected.artifacts:
+        validated = ArtifactReference.model_validate(_model_field_values(artifact), strict=True)
+        expected = saved_by_ref.get(validated.local_ref)
+        if expected is None or expected.model_dump(mode="json") != validated.model_dump(
+            mode="json"
+        ):
+            raise ValueError("adapter returned an artifact not registered by its runtime context")
+    return collected.model_copy(
+        update={"artifacts": [reference.model_copy(deep=True) for reference in source_artifacts]}
+    )
+
+
+def _model_field_values(model: BaseModel) -> dict[str, Any]:
+    return {name: getattr(model, name) for name in type(model).model_fields}
 
 
 def finalize_inline_source_result(

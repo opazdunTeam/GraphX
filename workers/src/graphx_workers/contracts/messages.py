@@ -16,6 +16,7 @@ from pydantic import (
 from graphx_workers.contracts.artifacts import ArtifactReference
 from graphx_workers.contracts.errors import ERROR_CLASSIFICATION, ErrorClassification, ErrorCode
 from graphx_workers.contracts.results import SourceResult, validate_artifact_refs
+from graphx_workers.contracts.schema import validate_raw_locator_numbers, validate_raw_record_count
 
 
 class ContractModel(BaseModel):
@@ -92,6 +93,28 @@ class SourceCollectRequested(MessageEnvelope[SourceCollectRequestedPayload]):
 
 class SourceCollectCompleted(MessageEnvelope[SourceResult]):
     type: Literal["source.collect.completed.v1"]
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: Any | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validate_raw_record_count(json_data, envelope=True)
+        validate_raw_locator_numbers(json_data, envelope=True)
+        return super().model_validate_json(
+            json_data,
+            strict=strict,
+            extra=extra,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
 
 
 class SourceCollectError(ContractModel):

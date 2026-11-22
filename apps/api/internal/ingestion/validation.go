@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -25,8 +26,20 @@ func ValidateSourceResult(result SourceResult, rawPayload []byte) error {
 	if digest != result.Digest {
 		return errors.New("source result digest does not match RFC 8785 canonical payload")
 	}
+	if err := validateRawLocatorNumbers(rawPayload); err != nil {
+		return err
+	}
+	if invalidPersistedText(result.AdapterVersion) ||
+		invalidPersistedText(result.ParserVersion) ||
+		invalidPersistedText(result.MappingVersion) ||
+		invalidPersistedText(result.NormalizationVersion) {
+		return errors.New("source result versions must not be blank")
+	}
 	artifactRefs, err := validateArtifactRefs(result.Artifacts)
 	if err != nil {
+		return err
+	}
+	if err := validateSourceArtifactKinds(result.Artifacts); err != nil {
 		return err
 	}
 	if err := validateArtifactTransport(result.Artifacts, result.JobID, result.AttemptNo); err != nil {
@@ -67,6 +80,9 @@ func ValidateManifest(
 	if result.Manifest.ByteSize != int64(len(storedBytes)) ||
 		result.Manifest.SHA256 != hex.EncodeToString(actualHash[:]) {
 		return errors.New("manifest hash or byte size does not match stored object")
+	}
+	if err := validateRawLocatorNumbers(storedBytes); err != nil {
+		return err
 	}
 	if result.JobID != manifest.JobID || result.AttemptNo != manifest.AttemptNo ||
 		result.RecordCount != manifest.RecordCount {
@@ -109,13 +125,23 @@ func validateContent(
 	claims []Claim,
 	artifacts []ArtifactReference,
 ) error {
+	if err := validateSourceArtifactKinds(artifacts); err != nil {
+		return err
+	}
 	artifactRefs, err := validateArtifactRefs(artifacts)
 	if err != nil {
 		return err
 	}
 
 	recordRefs := make(map[string]struct{}, len(records))
+	schemaVersionsByArtifact := make(map[string]string)
 	for _, record := range records {
+		if invalidPersistedText(record.LocalRef) ||
+			invalidPersistedText(record.ArtifactLocalRef) ||
+			invalidPersistedText(record.RecordType) ||
+			(record.ExternalID != nil && invalidPersistedText(*record.ExternalID)) {
+			return fmt.Errorf("record %q contains a blank required text value", record.LocalRef)
+		}
 		if _, exists := recordRefs[record.LocalRef]; exists {
 			return fmt.Errorf("duplicate source record local_ref %q", record.LocalRef)
 		}
@@ -123,6 +149,20 @@ func validateContent(
 		if _, exists := artifactRefs[record.ArtifactLocalRef]; !exists {
 			return fmt.Errorf("record %q references unknown artifact %q", record.LocalRef, record.ArtifactLocalRef)
 		}
+		if invalidPersistedText(record.SchemaVersion) {
+			return fmt.Errorf("record %q has a blank schema_version", record.LocalRef)
+		}
+		if err := validateJSONBCompatible("raw_data", record.RawData); err != nil {
+			return err
+		}
+		if schemaVersion, exists := schemaVersionsByArtifact[record.ArtifactLocalRef]; exists &&
+			schemaVersion != record.SchemaVersion {
+			return fmt.Errorf(
+				"artifact %q contains records with different schema versions",
+				record.ArtifactLocalRef,
+			)
+		}
+		schemaVersionsByArtifact[record.ArtifactLocalRef] = record.SchemaVersion
 	}
 
 	for _, claim := range claims {
@@ -141,7 +181,35 @@ func validateContent(
 	return nil
 }
 
+func validateSourceArtifactKinds(artifacts []ArtifactReference) error {
+	for _, artifact := range artifacts {
+		if artifact.Kind == "manifest" {
+			return errors.New("source artifacts cannot use manifest kind")
+		}
+	}
+	return nil
+}
+
 func validateClaim(claim Claim) error {
+	if invalidPersistedText(claim.SubjectLocalRef) ||
+		invalidPersistedText(claim.Predicate) ||
+		(claim.ObjectLocalRef != nil && invalidPersistedText(*claim.ObjectLocalRef)) {
+		return errors.New("claim reference and predicate fields must not be blank")
+	}
+	if claim.EvidenceExcerpt != nil && strings.ContainsRune(*claim.EvidenceExcerpt, '\x00') {
+		return errors.New("evidence_excerpt must not contain U+0000")
+	}
+	for name, value := range map[string]any{
+		"raw_value": claim.RawValue, "normalized_value": claim.NormalizedValue,
+		"qualifiers": claim.Qualifiers, "evidence_locator": claim.EvidenceLocator,
+	} {
+		if err := validateJSONBCompatible(name, value); err != nil {
+			return err
+		}
+	}
+	if err := validateEvidenceLocator(claim.EvidenceLocator); err != nil {
+		return err
+	}
 	switch claim.ClaimKind {
 	case "relationship":
 		if claim.ObjectLocalRef == nil {
@@ -189,6 +257,255 @@ func validateClaim(claim Claim) error {
 	return nil
 }
 
+func validateEvidenceLocator(locator map[string]any) error {
+	jsonPointer, hasJSON := locator["json_pointer"]
+	csvRow, hasCSV := locator["csv_row"]
+	page, hasPage := locator["page_number"]
+	fragment, hasFragment := locator["fragment"]
+	if boolCount(hasJSON)+boolCount(hasCSV)+boolCount(hasPage || hasFragment) != 1 {
+		return errors.New("evidence_locator must identify a JSON pointer, CSV row, or document page/fragment")
+	}
+	if hasJSON {
+		pointer, valid := jsonPointer.(string)
+		if !valid || !validJSONPointer(pointer) {
+			return errors.New("evidence json_pointer must be a valid RFC 6901 pointer")
+		}
+		return nil
+	}
+	if hasCSV {
+		if !positiveInteger(csvRow) {
+			return errors.New("evidence csv_row must be a positive integer")
+		}
+		return nil
+	}
+	if hasPage && !positiveInteger(page) {
+		return errors.New("evidence page_number must be a positive integer")
+	}
+	if hasFragment {
+		text, ok := fragment.(string)
+		if !ok || blankText(text) || strings.ContainsRune(text, '\x00') {
+			return errors.New("evidence fragment must be a non-empty string")
+		}
+	}
+	return nil
+}
+
+func validJSONPointer(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !strings.HasPrefix(value, "/") {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] != '~' {
+			continue
+		}
+		if index+1 >= len(value) || (value[index+1] != '0' && value[index+1] != '1') {
+			return false
+		}
+		index++
+	}
+	return true
+}
+
+func positiveInteger(value any) bool {
+	const maxSafeInteger = float64(1<<53 - 1)
+	valid := func(number float64) bool {
+		return number >= 1 && number <= maxSafeInteger && math.Trunc(number) == number
+	}
+	switch number := value.(type) {
+	case int:
+		return valid(float64(number))
+	case float64:
+		return valid(number)
+	case json.Number:
+		parsed, err := number.Float64()
+		return err == nil && valid(parsed)
+	default:
+		return false
+	}
+}
+
+func validateRawLocatorNumbers(document []byte) error {
+	var payload struct {
+		Claims []struct {
+			EvidenceLocator map[string]json.RawMessage `json:"evidence_locator"`
+		} `json:"claims"`
+	}
+	if err := json.Unmarshal(document, &payload); err != nil {
+		return fmt.Errorf("decode locator number tokens: %w", err)
+	}
+	for _, claim := range payload.Claims {
+		for _, field := range []string{"csv_row", "page_number"} {
+			raw, exists := claim.EvidenceLocator[field]
+			if !exists {
+				continue
+			}
+			token := strings.TrimSpace(string(raw))
+			if token == "" || token[0] == '"' || token == "null" {
+				continue
+			}
+			if !exactPositiveSafeIntegerToken(token) {
+				return fmt.Errorf("evidence %s must be an exact safe integer", field)
+			}
+		}
+	}
+	return nil
+}
+
+func exactPositiveSafeIntegerToken(token string) bool {
+	exponent := 0
+	if index := strings.IndexAny(token, "eE"); index >= 0 {
+		parsed, err := strconv.Atoi(token[index+1:])
+		if err != nil {
+			return false
+		}
+		exponent = parsed
+		token = token[:index]
+	}
+	if strings.HasPrefix(token, "-") {
+		return false
+	}
+	fractionDigits := 0
+	if index := strings.IndexByte(token, '.'); index >= 0 {
+		fractionDigits = len(token) - index - 1
+		token = token[:index] + token[index+1:]
+	}
+	digits := strings.TrimLeft(token, "0")
+	if digits == "" {
+		return false
+	}
+	if exponent < fractionDigits {
+		if exponent < fractionDigits-len(digits) {
+			return false
+		}
+		remove := fractionDigits - exponent
+		if strings.Trim(digits[len(digits)-remove:], "0") != "" {
+			return false
+		}
+		digits = strings.TrimLeft(digits[:len(digits)-remove], "0")
+		if digits == "" {
+			return false
+		}
+	} else {
+		scale := exponent - fractionDigits
+		if scale > 16 || len(digits)+scale > len("9007199254740991") {
+			return false
+		}
+		digits += strings.Repeat("0", scale)
+	}
+	const maximum = "9007199254740991"
+	return len(digits) < len(maximum) || len(digits) == len(maximum) && digits <= maximum
+}
+
+func invalidPersistedText(value string) bool {
+	return blankText(value) || strings.ContainsRune(value, '\x00')
+}
+
+func blankText(value string) bool {
+	return strings.TrimFunc(value, func(char rune) bool {
+		return unicode.IsSpace(char) || unicode.IsControl(char)
+	}) == ""
+}
+
+func validateJSONBCompatible(name string, value any) error {
+	pending := []any{value}
+	for len(pending) > 0 {
+		last := len(pending) - 1
+		item := pending[last]
+		pending = pending[:last]
+		switch item := item.(type) {
+		case string:
+			if strings.ContainsRune(item, '\x00') {
+				return fmt.Errorf("%s must not contain U+0000", name)
+			}
+		case []any:
+			pending = append(pending, item...)
+		case map[string]any:
+			for key, child := range item {
+				pending = append(pending, key, child)
+			}
+		}
+	}
+	return nil
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func BuildProcessingRunInputs(
+	result SourceResult,
+	manifest *SourceResultManifest,
+) ([]ProcessingRunInput, error) {
+	var records []SourceRecord
+	var claims []Claim
+	if result.Manifest == nil {
+		if manifest != nil {
+			return nil, errors.New("inline result cannot use manifest content")
+		}
+		records = result.Records
+		claims = result.Claims
+	} else {
+		if manifest == nil {
+			return nil, errors.New("manifest result requires manifest content")
+		}
+		if result.JobID != manifest.JobID || result.AttemptNo != manifest.AttemptNo ||
+			result.RecordCount != manifest.RecordCount {
+			return nil, errors.New("manifest metadata does not match completed result")
+		}
+		records = manifest.Records
+		claims = manifest.Claims
+	}
+	if result.RecordCount != len(records) {
+		return nil, errors.New("record_count must equal records length")
+	}
+	if err := validateContent(records, claims, result.Artifacts); err != nil {
+		return nil, err
+	}
+	if invalidPersistedText(result.ParserVersion) ||
+		invalidPersistedText(result.MappingVersion) ||
+		invalidPersistedText(result.NormalizationVersion) {
+		return nil, errors.New("processing run versions must not be empty")
+	}
+
+	byArtifact := make(map[string][]SourceRecord)
+	for _, record := range records {
+		byArtifact[record.ArtifactLocalRef] = append(byArtifact[record.ArtifactLocalRef], record)
+	}
+	runs := make([]ProcessingRunInput, 0, len(byArtifact))
+	for _, artifact := range result.Artifacts {
+		artifactRecords := byArtifact[artifact.LocalRef]
+		if len(artifactRecords) == 0 {
+			continue
+		}
+		schemaVersion := artifactRecords[0].SchemaVersion
+		if invalidPersistedText(schemaVersion) {
+			return nil, fmt.Errorf("artifact %q has an empty record schema version", artifact.LocalRef)
+		}
+		for _, record := range artifactRecords[1:] {
+			if record.SchemaVersion != schemaVersion {
+				return nil, fmt.Errorf(
+					"artifact %q contains records with different schema versions",
+					artifact.LocalRef,
+				)
+			}
+		}
+		runs = append(runs, ProcessingRunInput{
+			ArtifactLocalRef: artifact.LocalRef, ProcessingScope: "source_collection",
+			SchemaVersion: schemaVersion, ParserVersion: result.ParserVersion,
+			MappingVersion:       result.MappingVersion,
+			NormalizationVersion: result.NormalizationVersion,
+			Records:              artifactRecords,
+		})
+	}
+	return runs, nil
+}
+
 func validateArtifactRefs(artifacts []ArtifactReference) (map[string]struct{}, error) {
 	refs := make(map[string]struct{}, len(artifacts))
 	for _, artifact := range artifacts {
@@ -229,7 +546,9 @@ func validateArtifactTransport(artifacts []ArtifactReference, jobID string, atte
 		"etag": {}, "last-modified": {}, "content-language": {},
 	}
 	for _, artifact := range artifacts {
-		if utf8.RuneCountInString(artifact.LocalRef) > 200 ||
+		if invalidPersistedText(artifact.LocalRef) ||
+			invalidPersistedText(artifact.MediaType) ||
+			utf8.RuneCountInString(artifact.LocalRef) > 200 ||
 			strings.IndexFunc(artifact.LocalRef, unicode.IsControl) >= 0 {
 			return fmt.Errorf("artifact %q has an invalid local_ref", artifact.LocalRef)
 		}
@@ -252,7 +571,7 @@ func validateArtifactTransport(artifacts []ArtifactReference, jobID string, atte
 		}
 		for name, value := range artifact.HTTPMetadata {
 			if _, allowed := allowedMetadata[name]; !allowed || value == "" ||
-				utf8.RuneCountInString(value) > 512 || strings.ContainsAny(value, "\r\n") {
+				utf8.RuneCountInString(value) > 512 || strings.ContainsAny(value, "\x00\r\n") {
 				return fmt.Errorf("artifact %q has unsafe HTTP metadata", artifact.LocalRef)
 			}
 		}
@@ -318,7 +637,7 @@ func meaningful(value any) bool {
 	case nil:
 		return false
 	case string:
-		return strings.TrimSpace(value) != ""
+		return !blankText(value)
 	case []any:
 		return len(value) > 0
 	case map[string]any:

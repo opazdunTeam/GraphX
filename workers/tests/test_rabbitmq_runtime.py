@@ -200,13 +200,16 @@ class FakeAdapter:
     async def collect(
         self, request: CollectRequest, context: RuntimeAdapterContext
     ) -> CollectResult:
-        del request, context
+        del request
         self.calls += 1
         self.started.set()
         if self.gate is not None:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
+        cast(FakeContext, context).saved_artifacts = tuple(
+            artifact.model_copy(deep=True) for artifact in self.result.artifacts
+        )
         return self.result
 
 
@@ -232,13 +235,16 @@ class CancellationResistantAdapter(FakeAdapter):
     async def collect(
         self, request: CollectRequest, context: RuntimeAdapterContext
     ) -> CollectResult:
-        del request, context
+        del request
         self.started.set()
         while not self.release.is_set():
             try:
                 await self.release.wait()
             except asyncio.CancelledError:
                 self.cancellations += 1
+        cast(FakeContext, context).saved_artifacts = tuple(
+            artifact.model_copy(deep=True) for artifact in self.result.artifacts
+        )
         return self.result
 
 

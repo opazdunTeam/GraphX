@@ -5,11 +5,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import warnings
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from botocore.exceptions import (  # type: ignore[import-untyped]
@@ -760,6 +763,127 @@ async def test_persistence_infrastructure_error_takes_priority_over_cancellation
 
     with pytest.raises(type(persistence_error), match=str(persistence_error)):
         await saving
+
+
+@pytest.mark.asyncio
+async def test_artifact_session_isolates_authoritative_reference_from_callers() -> None:
+    artifact_session = session(MemoryS3Client())
+    reference = await artifact_session.save(
+        b"evidence",
+        "text/plain",
+        local_ref="artifact:raw:1",
+        kind="raw_response",
+        source_uri="https://example.test/source/1",
+        retrieved_at=NOW,
+        http_metadata={"etag": "source-v1"},
+    )
+    expected_sha256 = sha256(b"evidence").hexdigest()
+
+    reference.sha256 = "0" * 64
+    reference.http_metadata["etag"] = "mutated-return"
+    exposed = artifact_session.saved_artifacts[0]
+    assert exposed.sha256 == expected_sha256
+    assert exposed.http_metadata == {"etag": "source-v1"}
+
+    exposed.sha256 = "1" * 64
+    exposed.http_metadata["etag"] = "mutated-property"
+    assert artifact_session.saved_artifacts[0].sha256 == expected_sha256
+    assert artifact_session.saved_artifacts[0].http_metadata == {"etag": "source-v1"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_session_rejects_postgres_incompatible_metadata_before_put() -> None:
+    client = MemoryS3Client()
+    artifact_session = session(client)
+
+    with pytest.raises(ArtifactPolicyError, match="local_ref"):
+        await artifact_session.save(
+            b"evidence",
+            "text/plain",
+            local_ref=" ",
+            kind="raw_response",
+            source_uri="https://example.test/source/1",
+            retrieved_at=NOW,
+        )
+    with pytest.raises(ArtifactPolicyError, match="HTTP metadata"):
+        await artifact_session.save(
+            b"evidence",
+            "text/plain",
+            local_ref="artifact:raw:1",
+            kind="raw_response",
+            source_uri="https://example.test/source/1",
+            retrieved_at=NOW,
+            http_metadata={"etag": "bad\x00value"},
+        )
+
+    assert client.objects == {}
+
+
+@pytest.mark.asyncio
+async def test_artifact_reference_comparison_uses_exact_wire_datetime() -> None:
+    client = MemoryS3Client()
+    artifact_session = session(client)
+    retrieved_at = datetime(2024, 11, 3, 1, 30, tzinfo=ZoneInfo("America/New_York"), fold=1)
+    first = await artifact_session.save(
+        b"evidence",
+        "text/plain",
+        local_ref="artifact:raw:dst",
+        kind="raw_response",
+        source_uri="https://example.test/source/dst",
+        retrieved_at=retrieved_at,
+    )
+    repeated = await artifact_session.save(
+        b"evidence",
+        "text/plain",
+        local_ref="artifact:raw:dst",
+        kind="raw_response",
+        source_uri="https://example.test/source/dst",
+        retrieved_at=retrieved_at,
+    )
+    assert repeated.model_dump(mode="json") == first.model_dump(mode="json")
+
+    recovered = ArtifactSession(
+        artifact_session._store,
+        job_id=artifact_session._job_id,
+        attempt_no=1,
+        max_bytes=1024,
+        spool_max_memory_bytes=16,
+        allowed_media_types=frozenset({"text/plain"}),
+    )
+    await recovered.recover()
+    assert b"".join([chunk async for chunk in recovered.download(first)]) == b"evidence"
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_mutated_reference_without_serialization_warning() -> None:
+    artifact_session = session(MemoryS3Client())
+    reference = await artifact_session.save(
+        b"evidence",
+        "text/plain",
+        local_ref="artifact:raw:1",
+        kind="raw_response",
+        source_uri="https://example.test/source/1",
+        retrieved_at=NOW,
+        http_metadata={"etag": "source-v1"},
+    )
+    mutations = (
+        lambda value: setattr(value, "media_type", cast(Any, {"private": "document text"})),
+        lambda value: setattr(value, "byte_size", True),
+        lambda value: value.http_metadata.__setitem__(
+            "etag", cast(Any, {"private": "document text"})
+        ),
+    )
+
+    for mutate in mutations:
+        candidate = reference.model_copy(deep=True)
+        mutate(candidate)
+        with (
+            warnings.catch_warnings(record=True) as captured,
+            pytest.raises(ArtifactPolicyError, match="not registered"),
+        ):
+            warnings.simplefilter("always")
+            b"".join([chunk async for chunk in artifact_session.download(candidate)])
+        assert captured == []
 
 
 @pytest.mark.asyncio

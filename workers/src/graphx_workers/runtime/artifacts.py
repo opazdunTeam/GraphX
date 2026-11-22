@@ -70,7 +70,7 @@ class ArtifactSession:
 
     @property
     def saved_artifacts(self) -> Sequence[ArtifactReference]:
-        return tuple(self._artifacts.values())
+        return tuple(reference.model_copy(deep=True) for reference in self._artifacts.values())
 
     @property
     def prefix(self) -> str:
@@ -232,16 +232,20 @@ class ArtifactSession:
         )
         local_ref = candidate.local_ref
         existing = self._artifacts.get(local_ref)
-        if existing is not None and existing != reference:
+        if existing is not None and not _same_reference_wire_value(existing, reference):
             raise ObjectIntegrityError(
                 "saved artifact metadata changed for the same local reference"
             )
-        self._artifacts[local_ref] = reference
-        return reference
+        self._artifacts[local_ref] = reference.model_copy(deep=True)
+        return reference.model_copy(deep=True)
 
     async def download(self, reference: ArtifactReference) -> AsyncIterator[bytes]:
         registered = self._artifacts.get(reference.local_ref)
-        if registered != reference or reference.object_key != self._object_key(reference.local_ref):
+        if (
+            registered is None
+            or not _same_reference_wire_value(registered, reference)
+            or reference.object_key != self._object_key(reference.local_ref)
+        ):
             raise ArtifactPolicyError("artifact is not registered in this job attempt session")
         directory = str(self._spool_directory) if self._spool_directory is not None else None
         with tempfile.SpooledTemporaryFile(
@@ -317,7 +321,7 @@ class ArtifactSession:
 
     def _validate_local_ref(self, local_ref: str) -> None:
         if (
-            not local_ref
+            not local_ref.strip()
             or len(local_ref) > 200
             or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in local_ref)
             or len(self._object_key(local_ref).encode()) > 1024
@@ -334,6 +338,21 @@ async def _content_chunks(content: bytes | AsyncIterable[bytes]) -> AsyncIterato
             raise TypeError("artifact stream must yield bytes")
         if chunk:
             yield chunk
+
+
+def _same_reference_wire_value(left: ArtifactReference, right: ArtifactReference) -> bool:
+    left_value = _validated_reference_wire_value(left)
+    right_value = _validated_reference_wire_value(right)
+    return left_value is not None and right_value is not None and left_value == right_value
+
+
+def _validated_reference_wire_value(reference: ArtifactReference) -> dict[str, Any] | None:
+    fields = {name: getattr(reference, name) for name in type(reference).model_fields}
+    try:
+        validated = ArtifactReference.model_validate(fields, strict=True)
+    except TypeError, ValueError, ValidationError:
+        return None
+    return validated.model_dump(mode="json")
 
 
 def sanitize_original_filename(value: str | None) -> str | None:
@@ -354,7 +373,7 @@ def sanitize_http_metadata(values: Mapping[str, str]) -> dict[str, str]:
         if name not in SAFE_HTTP_METADATA:
             continue
         value = raw_value.strip()
-        if not value or len(value) > 512 or any(character in value for character in "\r\n"):
+        if not value or len(value) > 512 or any(character in value for character in "\x00\r\n"):
             raise ArtifactPolicyError(f"unsafe HTTP metadata value for {name}")
         sanitized[name] = value
     return sanitized

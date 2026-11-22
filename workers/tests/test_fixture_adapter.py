@@ -1,10 +1,13 @@
 import asyncio
+import json
+import warnings
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import AnyUrl, AwareDatetime
@@ -22,19 +25,22 @@ from graphx_workers.contracts.messages import (
 )
 from graphx_workers.contracts.results import (
     SourceResultManifest,
+    compute_source_result_digest,
     validate_manifest_semantics,
 )
 from graphx_workers.contracts.schema import ContractSchemaRegistry, decode_contract_json
+from graphx_workers.runtime.errors import RuntimeFatalError
 from graphx_workers.runtime.finalization import MANIFEST_LOCAL_REF, ManifestResultFinalizer
 from graphx_workers.runtime.processor import (
     AdapterContextFactory,
     AdapterRegistration,
+    InlineResultFinalizer,
     RuntimeAdapterContext,
     SourceCommandProcessor,
 )
 from graphx_workers.runtime.replay import FileTerminalReplayStore, VolatileTerminalReplayStore
 from graphx_workers.runtime.results import ResultTooComplexError
-from graphx_workers.runtime.terminal import TerminalMessageFactory
+from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
 from graphx_workers.sdk import (
     AdapterContext,
     AdapterMetadata,
@@ -105,7 +111,7 @@ class RecordingContext:
             parent_local_ref=parent_local_ref,
         )
         self.saved_content.append(stored)
-        self.saved_artifacts.append(reference)
+        self.saved_artifacts.append(reference.model_copy(deep=True))
         return reference
 
     async def save_manifest(
@@ -132,7 +138,7 @@ class RecordingContext:
             original_filename="source-result-manifest.v1.json",
         )
         self.saved_content.append(stored)
-        self.saved_artifacts.append(reference)
+        self.saved_artifacts.append(reference.model_copy(deep=True))
         return reference
 
 
@@ -314,6 +320,145 @@ async def test_manifest_finalizer_keeps_small_result_inline() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("force_manifest", [False, True], ids=["inline", "manifest"])
+@pytest.mark.parametrize(
+    "with_additional_artifact", [False, True], ids=["same-artifacts", "reconciled-artifacts"]
+)
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param("blank_record_type", id="mutated-model"),
+        pytest.param("bytes_with_nul", id="bytes-json-conversion"),
+        pytest.param("set_with_nul", id="set-json-conversion"),
+        pytest.param("unsafe_integer", id="unsafe-integer"),
+        pytest.param("nan", id="non-finite-number"),
+        pytest.param("non_string_key", id="non-string-object-key"),
+        pytest.param("bytes_key_collision", id="bytes-key-collision"),
+        pytest.param("model_value", id="model-value"),
+        pytest.param("mutated_artifact_hash", id="mutated-artifact-hash"),
+        pytest.param("mutated_artifact_fold", id="mutated-artifact-fold"),
+    ],
+)
+async def test_finalizer_revalidates_mutated_adapter_content_before_publish(
+    force_manifest: bool,
+    with_additional_artifact: bool,
+    mutation: str,
+) -> None:
+    registry = ContractSchemaRegistry(SCHEMA_ROOT)
+    context = RecordingContext()
+    collected = await FixtureAdapter().collect(request(), cast(AdapterContext, context))
+    if with_additional_artifact:
+        await context.save_artifact(
+            b"{}",
+            "application/json",
+            local_ref="artifact:additional",
+            kind="document",
+            source_uri="https://example.test/additional",
+            retrieved_at=NOW,
+        )
+    if mutation == "blank_record_type":
+        collected.records[0].record_type = " "
+    elif mutation == "bytes_with_nul":
+        collected.records[0].raw_data = {"value": b"prefix\x00suffix"}
+    elif mutation == "set_with_nul":
+        collected.records[0].raw_data = {"value": {"nested\x00set"}}
+    elif mutation == "unsafe_integer":
+        collected.records[0].raw_data = {"value": 9_007_199_254_740_992}
+    elif mutation == "non_string_key":
+        collected.claims[0].raw_value = {1: "numeric key"}
+    elif mutation == "bytes_key_collision":
+        collected.records[0].raw_data = cast(Any, {b"sample": "first", "sample": "second"})
+    elif mutation == "model_value":
+        collected.claims[0].raw_value = collected.records[0]
+    elif mutation == "mutated_artifact_hash":
+        collected.artifacts[0].sha256 = "0" * 64
+    elif mutation == "mutated_artifact_fold":
+        boundary = datetime(2024, 11, 3, 1, 30, tzinfo=ZoneInfo("America/New_York"), fold=0)
+        context.saved_artifacts[0].retrieved_at = boundary
+        collected.artifacts[0].retrieved_at = boundary.replace(fold=1)
+    else:
+        collected.claims[0].raw_value = float("nan")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"must not be blank|U\+0000|safe integer domain|finite JSON numbers|"
+            r"non-JSON|object keys must be strings|not registered"
+        ),
+    ):
+        await ManifestResultFinalizer(
+            registry, inline_max_bytes=1024 * 1024, manifest_max_bytes=1024 * 1024
+        ).finalize(
+            command(),
+            collected,
+            cast(RuntimeAdapterContext, context),
+            force_manifest=force_manifest,
+        )
+
+    assert len(context.saved_content) == 1 + int(with_additional_artifact)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "blank_record_type",
+        "nested_nul",
+        "unsafe_integer",
+        "nan",
+        "non_string_key",
+        "bytes_key_collision",
+        "model_value",
+        "mutated_artifact_hash",
+        "mutated_artifact_fold",
+    ],
+)
+async def test_default_inline_finalizer_revalidates_actual_json_domain(mutation: str) -> None:
+    context = RecordingContext()
+    collected = await FixtureAdapter().collect(request(), cast(AdapterContext, context))
+    if mutation == "blank_record_type":
+        collected.records[0].record_type = "\u001f"
+    elif mutation == "nested_nul":
+        collected.records[0].raw_data = {"nested": ["bad\x00value"]}
+    elif mutation == "unsafe_integer":
+        collected.records[0].raw_data = {"value": 9_007_199_254_740_992}
+    elif mutation == "non_string_key":
+        collected.claims[0].raw_value = {1: "numeric key"}
+    elif mutation == "bytes_key_collision":
+        collected.records[0].raw_data = cast(Any, {b"sample": "first", "sample": "second"})
+    elif mutation == "model_value":
+        collected.claims[0].raw_value = collected.records[0]
+    elif mutation == "mutated_artifact_hash":
+        collected.artifacts[0].sha256 = "0" * 64
+    elif mutation == "mutated_artifact_fold":
+        boundary = datetime(2024, 11, 3, 1, 30, tzinfo=ZoneInfo("America/New_York"), fold=0)
+        context.saved_artifacts[0].retrieved_at = boundary
+        collected.artifacts[0].retrieved_at = boundary.replace(fold=1)
+    else:
+        collected.claims[0].raw_value = float("nan")
+
+    with pytest.raises(ValueError):
+        await InlineResultFinalizer().finalize(
+            command(), collected, cast(RuntimeAdapterContext, context)
+        )
+
+
+@pytest.mark.asyncio
+async def test_invalid_mutated_field_is_rejected_without_serialization_warning() -> None:
+    context = RecordingContext()
+    collected = await FixtureAdapter().collect(request(), cast(AdapterContext, context))
+    collected.records[0].record_type = cast(Any, {"diagnostic_sentinel": "document text"})
+
+    with warnings.catch_warnings(record=True) as captured, pytest.raises(ValueError):
+        warnings.simplefilter("always")
+        await InlineResultFinalizer().finalize(
+            command(), collected, cast(RuntimeAdapterContext, context)
+        )
+
+    assert captured == []
+
+
+@pytest.mark.asyncio
 async def test_manifest_finalizer_stores_large_result_without_inline_duplication() -> None:
     registry = ContractSchemaRegistry(SCHEMA_ROOT)
     context = RecordingContext()
@@ -440,6 +585,56 @@ async def test_fixture_runtime_replays_exact_bytes_without_reexecution() -> None
     assert context_factory.calls == 1
     assert context_factory.context is not None
     assert len(context_factory.context.saved_content) == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_replay_rejects_semantically_invalid_completed_result() -> None:
+    registry = ContractSchemaRegistry(SCHEMA_ROOT)
+    runtime = processor(registry, RecordingContextFactory())
+    source_command = command()
+    prepared = await runtime.prepare(source_command.model_dump_json().encode())
+    document = decode_contract_json(prepared.body)
+    payload = cast(dict[str, Any], document["payload"])
+    records = cast(list[dict[str, Any]], payload["records"])
+    records.append(
+        {
+            **records[0],
+            "local_ref": "organization:conflicting-schema",
+            "schema_version": "fixture-organization/other",
+        }
+    )
+    payload["record_count"] = 2
+    payload["digest"] = compute_source_result_digest(payload)
+    corrupted = PreparedTerminalMessage(
+        message_id=prepared.message_id,
+        message_type=prepared.message_type,
+        correlation_id=prepared.correlation_id,
+        body=json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode(),
+    )
+
+    with pytest.raises(RuntimeFatalError, match="stored terminal replay is invalid"):
+        runtime._validate_replay(source_command, corrupted)
+
+
+@pytest.mark.asyncio
+async def test_terminal_replay_rejects_inexact_record_count_token() -> None:
+    registry = ContractSchemaRegistry(SCHEMA_ROOT)
+    runtime = processor(registry, RecordingContextFactory())
+    source_command = command()
+    prepared = await runtime.prepare(source_command.model_dump_json().encode())
+    corrupted_body = prepared.body.replace(
+        b'"record_count":1', b'"record_count":1.00000000000000001', 1
+    )
+    assert corrupted_body != prepared.body
+    corrupted = PreparedTerminalMessage(
+        message_id=prepared.message_id,
+        message_type=prepared.message_type,
+        correlation_id=prepared.correlation_id,
+        body=corrupted_body,
+    )
+
+    with pytest.raises(RuntimeFatalError, match="stored terminal replay is invalid"):
+        runtime._validate_replay(source_command, corrupted)
 
 
 @pytest.mark.asyncio

@@ -132,6 +132,30 @@ def collected_result(job_id: UUID = JOB_ID) -> CollectResult:
     )
 
 
+def test_collect_result_json_rejects_inexact_nested_locator_token() -> None:
+    raw = (
+        collected_result()
+        .model_dump_json()
+        .replace('"json_pointer":"/name"', '"csv_row":1.00000000000000001')
+    )
+
+    with pytest.raises(ValueError, match="exact safe integer"):
+        CollectResult.model_validate_json(raw)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["adapter_version", "parser_version", "mapping_version", "normalization_version"],
+)
+@pytest.mark.parametrize("value", [" \t", "\u001c", "\u00a0", "v\x00x"])
+def test_collect_result_rejects_invalid_versions(field: str, value: str) -> None:
+    payload = collected_result().model_dump()
+    payload[field] = value
+
+    with pytest.raises(ValidationError, match="result versions"):
+        CollectResult.model_validate(payload)
+
+
 def test_adapter_request_is_independent_from_transport_metadata() -> None:
     request = CollectRequest(
         operation="search_subject",

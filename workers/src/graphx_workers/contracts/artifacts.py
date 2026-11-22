@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from graphx_workers.contracts.values import validate_jsonb_compatible, validate_persisted_text
+
 SAFE_HTTP_METADATA = frozenset({"etag", "last-modified", "content-language"})
 
 
@@ -44,6 +46,11 @@ class ArtifactReference(BaseModel):
         max_length=200,
         pattern=r"^[^\x00-\x1f\x7f-\x9f]+$",
     )
+
+    @field_validator("local_ref", "media_type")
+    @classmethod
+    def validate_persisted_text_fields(cls, value: str) -> str:
+        return validate_persisted_text(value, "artifact text fields")
 
     @field_validator("source_uri", mode="before")
     @classmethod
@@ -84,6 +91,11 @@ class ArtifactReference(BaseModel):
             if not 1 <= port <= 65535 or port_text != str(port):
                 raise ValueError("source_uri port must be canonical and between 1 and 65535")
         return value
+
+    @field_validator("http_metadata", mode="before")
+    @classmethod
+    def validate_raw_http_metadata(cls, values: object) -> object:
+        return validate_jsonb_compatible(values, "http_metadata")
 
     @field_validator("http_metadata")
     @classmethod

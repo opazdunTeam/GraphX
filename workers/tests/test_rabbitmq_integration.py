@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import aio_pika
@@ -118,28 +118,26 @@ class FakeAdapter:
                     raise
             self.cancelled.set()
             raise
+        artifact = ArtifactReference(
+            local_ref="artifact:raw:1",
+            kind="raw_response",
+            object_key=artifact_object_key(context.job_id, context.attempt_no, "artifact:raw:1"),
+            sha256="a" * 64,
+            media_type="application/json",
+            byte_size=2,
+            source_uri=AnyUrl("https://example.test/subject/1"),
+            retrieved_at=NOW,
+            published_at=None,
+            http_metadata={},
+        )
+        cast(Any, context).saved_artifacts = (artifact.model_copy(deep=True),)
         return CollectResult(
             outcome="not_found",
             adapter_version="fixture-adapter/1",
             parser_version="fixture-parser/1",
             mapping_version="fixture-mapper/1",
             normalization_version="normalization/1",
-            artifacts=[
-                ArtifactReference(
-                    local_ref="artifact:raw:1",
-                    kind="raw_response",
-                    object_key=artifact_object_key(
-                        context.job_id, context.attempt_no, "artifact:raw:1"
-                    ),
-                    sha256="a" * 64,
-                    media_type="application/json",
-                    byte_size=2,
-                    source_uri=AnyUrl("https://example.test/subject/1"),
-                    retrieved_at=NOW,
-                    published_at=None,
-                    http_metadata={},
-                )
-            ],
+            artifacts=[artifact],
         )
 
 
