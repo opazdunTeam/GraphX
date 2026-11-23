@@ -44,6 +44,14 @@ go run ./cmd/api
 ```
 
 ```powershell
+# Отдельный publisher process; PostgreSQL и RabbitMQ должны быть доступны
+cd apps/api
+$env:POSTGRES_DSN = "postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable"
+$env:RABBITMQ_URL = "amqp://graphx:change-me@localhost:5672/graphx"
+go run ./cmd/publisher
+```
+
+```powershell
 cd workers
 uv sync
 uv run graphx-source-worker --check
@@ -62,6 +70,14 @@ cd apps/api
 export POSTGRES_DSN='postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable'
 docker compose -f docker-compose.test.yaml up -d --wait
 go run ./cmd/api
+```
+
+```bash
+# Отдельный publisher process; PostgreSQL и RabbitMQ должны быть доступны
+cd apps/api
+export POSTGRES_DSN='postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable'
+export RABBITMQ_URL='amqp://graphx:change-me@localhost:5672/graphx'
+go run ./cmd/publisher
 ```
 
 ```bash

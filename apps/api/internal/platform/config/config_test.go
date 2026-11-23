@@ -22,6 +22,7 @@ var apiEnvKeys = []string{
 	"POSTGRES_MIN_CONNS",
 	"POSTGRES_CONNECT_TIMEOUT",
 	"POSTGRES_HEALTH_TIMEOUT",
+	"RABBITMQ_URL",
 	"INVESTIGATION_DEFAULT_DEPTH",
 	"INVESTIGATION_MAX_DEPTH",
 	"INVESTIGATION_DEFAULT_ENTITY_LIMIT",
@@ -137,6 +138,39 @@ func TestLoadProcess_DoesNotRequirePostgres(t *testing.T) {
 	}
 	if cfg.Environment != "local" {
 		t.Errorf("Environment = %q, want local", cfg.Environment)
+	}
+}
+
+func TestLoadPublisherRequiresValidRabbitMQURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "missing URL"},
+		{name: "unsupported scheme", url: "http://rabbitmq:5672"},
+		{name: "missing host", url: "amqp:///vhost"},
+		{name: "invalid port", url: "amqp://rabbitmq:port/vhost"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv("RABBITMQ_URL", test.url)
+			if _, err := LoadPublisher(); err == nil {
+				t.Fatal("LoadPublisher() error = nil, want configuration error")
+			}
+		})
+	}
+
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("RABBITMQ_URL", "amqps://publisher:secret@rabbitmq.example:5671/graphx")
+	cfg, err := LoadPublisher()
+	if err != nil {
+		t.Fatalf("LoadPublisher() error = %v", err)
+	}
+	if cfg.RabbitMQ.URL != "amqps://publisher:secret@rabbitmq.example:5671/graphx" {
+		t.Fatal("LoadPublisher() did not preserve the configured RabbitMQ URL")
 	}
 }
 

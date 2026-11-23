@@ -287,27 +287,27 @@ func run() error {
 	}
 	if err := executeGoose("up-to", "7"); err != nil {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
-		return fmt.Errorf("apply artifact lineage boundary: %w", err)
+		return fmt.Errorf("apply transactional outbox lease migration: %w", err)
 	}
 	if err := executePSQL(`
 		do $$
 		begin
-			if not exists (
-				select 1 from information_schema.columns
-				where table_schema = 'public' and table_name = 'artifacts'
-					and column_name = 'parent_artifact_id'
-			) or not exists (
-				select 1 from information_schema.columns
-				where table_schema = 'public' and table_name = 'artifacts'
-					and column_name = 'original_filename'
-			) then
-				raise exception 'version 7 artifact lineage boundary is invalid';
+			if (select max(version_id) from goose_db_version where is_applied) <> 7
+				or not exists (
+					select 1 from information_schema.columns
+					where table_name = 'outbox_messages' and column_name = 'lease_token'
+				)
+				or not exists (
+					select 1 from information_schema.columns
+					where table_name = 'outbox_messages' and column_name = 'lease_until'
+				) then
+				raise exception 'version 7 outbox lease schema is invalid';
 			end if;
 		end
 		$$
 	`); err != nil {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
-		return fmt.Errorf("verify artifact lineage schema boundary: %w", err)
+		return fmt.Errorf("verify transactional outbox lease migration: %w", err)
 	}
 
 	testCommand := exec.Command(

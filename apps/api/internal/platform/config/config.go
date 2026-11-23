@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type Config struct {
 	Process
 	HTTP          HTTP
 	Postgres      Postgres
+	RabbitMQ      RabbitMQ
 	Investigation Investigation
 }
 
@@ -65,6 +67,10 @@ type Postgres struct {
 	MinConns       int32
 	ConnectTimeout time.Duration
 	HealthTimeout  time.Duration
+}
+
+type RabbitMQ struct {
+	URL string
 }
 
 type Investigation struct {
@@ -103,6 +109,23 @@ func LoadAPI() (Config, error) {
 	}, nil
 }
 
+func LoadPublisher() (Config, error) {
+	process, err := LoadProcess()
+	if err != nil {
+		return Config{}, err
+	}
+	postgres, err := loadPostgres()
+	if err != nil {
+		return Config{}, err
+	}
+	rabbitMQ, err := loadRabbitMQ()
+	if err != nil {
+		return Config{}, err
+	}
+
+	return Config{Process: process, Postgres: postgres, RabbitMQ: rabbitMQ}, nil
+}
+
 func LoadProcess() (Process, error) {
 	level, err := parseLogLevel(envOrDefault("LOG_LEVEL", defaultLogLevel))
 	if err != nil {
@@ -123,6 +146,24 @@ func LoadProcess() (Process, error) {
 		LogLevel:    level,
 		LogFormat:   format,
 	}, nil
+}
+
+func loadRabbitMQ() (RabbitMQ, error) {
+	rawURL := strings.TrimSpace(os.Getenv("RABBITMQ_URL"))
+	if rawURL == "" {
+		return RabbitMQ{}, fmt.Errorf("RABBITMQ_URL is required")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "amqp" && parsed.Scheme != "amqps") || parsed.Hostname() == "" {
+		return RabbitMQ{}, fmt.Errorf("RABBITMQ_URL must be a valid amqp or amqps URL")
+	}
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return RabbitMQ{}, fmt.Errorf("RABBITMQ_URL must contain a valid port")
+		}
+	}
+	return RabbitMQ{URL: rawURL}, nil
 }
 
 func loadInvestigation() (Investigation, error) {
