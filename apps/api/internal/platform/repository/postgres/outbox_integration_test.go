@@ -449,3 +449,120 @@ func TestOutboxConfirmDoesNotChangeTerminalOrNewerAttempt(t *testing.T) {
 		})
 	}
 }
+
+func TestOutboxConfirmCommitsWhileInvestigationCancellationIsConcurrent(t *testing.T) {
+	ctx := t.Context()
+	pool, err := Open(ctx, testPostgresConfig())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	store := NewOutboxStore(pool)
+
+	investigationID := "10000000-0000-4000-8000-000000000084"
+	jobID := "20000000-0000-4000-8000-000000000084"
+	messageID := "30000000-0000-4000-8000-000000000084"
+	seedRunningInvestigation(t, ctx, pool, investigationID, "Concurrent publisher confirm and cancellation")
+	if _, err := pool.Exec(ctx, `
+		insert into source_jobs (
+			id, investigation_id, source_id, operation, purpose,
+			request_hash, idempotency_key
+		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'outbox-cancel-race')
+	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("insert source job: %v", err)
+	}
+	payload := `{"message_id":"` + messageID + `","type":"source.collect.requested.v1","payload":{"job_id":"` + jobID + `","attempt_no":1}}`
+	if _, err := pool.Exec(ctx, `
+		insert into outbox_messages (
+			id, message_type, aggregate_type, aggregate_id, payload, created_at, available_at
+		) values (
+			$1, 'source.collect.requested.v1', 'source_job', $2, $3::jsonb,
+			now() - interval '100 years', now() - interval '100 years'
+		)
+	`, messageID, jobID, payload); err != nil {
+		t.Fatalf("insert outbox message: %v", err)
+	}
+	message, err := store.Claim(ctx, time.Minute)
+	if err != nil || message == nil || message.ID != messageID {
+		t.Fatalf("Claim() = %#v, %v", message, err)
+	}
+
+	cancelTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin cancellation: %v", err)
+	}
+	if _, err := cancelTx.Exec(ctx, `
+		update investigations
+		set status = 'cancelled', completed_at = now()
+		where id = $1
+	`, investigationID); err != nil {
+		_ = cancelTx.Rollback(ctx)
+		t.Fatalf("stage cancellation: %v", err)
+	}
+	confirmed := make(chan error, 1)
+	go func() {
+		confirmed <- store.MarkPublished(ctx, *message, 1)
+	}()
+	select {
+	case confirmErr := <-confirmed:
+		_ = cancelTx.Rollback(ctx)
+		t.Fatalf("MarkPublished() returned before cancellation committed: %v", confirmErr)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := cancelTx.Commit(ctx); err != nil {
+		t.Fatalf("commit cancellation: %v", err)
+	}
+	if err := <-confirmed; err != nil {
+		t.Fatalf("MarkPublished() after concurrent cancellation error = %v", err)
+	}
+
+	var published bool
+	var jobStatus string
+	if err := pool.QueryRow(ctx, `
+		select message.published_at is not null, job.status
+		from outbox_messages as message
+		join source_jobs as job on job.id = message.aggregate_id
+		where message.id = $1
+	`, messageID).Scan(&published, &jobStatus); err != nil {
+		t.Fatalf("read confirm/cancellation result: %v", err)
+	}
+	if !published || jobStatus != "pending" {
+		t.Fatalf("confirm/cancellation result = published %t job %s", published, jobStatus)
+	}
+}
+
+func TestOutboxRescheduleSaturatesMaximumAttemptCount(t *testing.T) {
+	ctx := t.Context()
+	pool, err := Open(ctx, testPostgresConfig())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	store := NewOutboxStore(pool)
+	messageID := "30000000-0000-4000-8000-000000000085"
+	if _, err := pool.Exec(ctx, `
+		insert into outbox_messages (
+			id, message_type, aggregate_type, aggregate_id, payload,
+			publish_attempts, available_at, created_at
+		) values (
+			$1, 'test.message.v1', 'test', $1, '{"test":true}'::jsonb, 2147483647,
+			now() - interval '200 years', now() - interval '200 years'
+		)
+	`, messageID); err != nil {
+		t.Fatalf("insert saturated outbox message: %v", err)
+	}
+	message, err := store.Claim(ctx, time.Minute)
+	if err != nil || message == nil || message.ID != messageID {
+		t.Fatalf("Claim() = %#v, %v", message, err)
+	}
+	if err := store.Reschedule(ctx, *message, time.Second); err != nil {
+		t.Fatalf("Reschedule() saturated counter error = %v", err)
+	}
+	var attempts int
+	if err := pool.QueryRow(ctx, `select publish_attempts from outbox_messages where id = $1`, messageID).Scan(&attempts); err != nil {
+		t.Fatalf("read saturated counter: %v", err)
+	}
+	if attempts != 2147483647 {
+		t.Fatalf("publish_attempts = %d, want 2147483647", attempts)
+	}
+}

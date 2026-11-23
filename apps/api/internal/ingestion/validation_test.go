@@ -81,7 +81,7 @@ func TestResultRecordCountDecodesEquivalentExactIntegerTokens(t *testing.T) {
 				"manifest": &SourceResultManifest{},
 			} {
 				t.Run(name, func(t *testing.T) {
-					raw := []byte(fmt.Sprintf(`{"record_count":%s}`, test.token))
+					raw := fmt.Appendf(nil, `{"record_count":%s}`, test.token)
 					if err := json.Unmarshal(raw, target); err != nil {
 						t.Fatalf("decode equivalent integer token: %v", err)
 					}
@@ -106,7 +106,7 @@ func TestResultRecordCountRejectsInexactTokens(t *testing.T) {
 		"-1", "1.5", "1.00000000000000001", "9007199254740992.0", `"1"`, "true", "null",
 	} {
 		t.Run(token, func(t *testing.T) {
-			raw := []byte(fmt.Sprintf(`{"record_count":%s}`, token))
+			raw := fmt.Appendf(nil, `{"record_count":%s}`, token)
 			if err := json.Unmarshal(raw, &SourceResult{}); err == nil {
 				t.Fatal("expected inexact record_count to be rejected")
 			}

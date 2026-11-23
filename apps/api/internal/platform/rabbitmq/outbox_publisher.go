@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	CommandExchange      = "commands.topic"
-	publisherDialTimeout = 5 * time.Second
+	CommandExchange       = "commands.topic"
+	publisherDialTimeout  = 5 * time.Second
+	publisherCloseTimeout = time.Second
 )
 
 type ConfirmPublisher struct {
@@ -90,8 +91,7 @@ func (p *ConfirmPublisher) Publish(ctx context.Context, message outbox.Message) 
 	connection := p.conn
 	seqNo := channel.GetNextPublishSeqNo()
 	stopCloseOnCancel := context.AfterFunc(ctx, func() {
-		_ = channel.Close()
-		_ = connection.Close()
+		abortConnection(connection)
 	})
 	publishErr := channel.PublishWithContext(
 		ctx,
@@ -188,18 +188,14 @@ func (p *ConfirmPublisher) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var closeErrors []error
-	if p.channel != nil {
-		if err := p.channel.Close(); err != nil && !p.channel.IsClosed() {
-			closeErrors = append(closeErrors, fmt.Errorf("close RabbitMQ publisher channel: %w", err))
-		}
-		p.channel = nil
-	}
 	if p.conn != nil {
-		if err := p.conn.Close(); err != nil && !p.conn.IsClosed() {
+		if err := p.conn.CloseDeadline(time.Now().Add(publisherCloseTimeout)); err != nil &&
+			!errors.Is(err, amqp.ErrClosed) {
 			closeErrors = append(closeErrors, fmt.Errorf("close RabbitMQ publisher connection: %w", err))
 		}
-		p.conn = nil
 	}
+	p.channel = nil
+	p.conn = nil
 	p.confirms = nil
 	p.returns = nil
 	p.closed = nil
@@ -211,22 +207,80 @@ func (p *ConfirmPublisher) connect(ctx context.Context) error {
 		return err
 	}
 	dialer := &net.Dialer{Timeout: publisherDialTimeout}
+	var transportMu sync.Mutex
+	var transport net.Conn
+	stopCloseOnCancel := context.AfterFunc(ctx, func() {
+		transportMu.Lock()
+		defer transportMu.Unlock()
+		if transport != nil {
+			_ = transport.Close()
+		}
+	})
+	defer stopCloseOnCancel()
 	conn, err := amqp.DialConfig(p.url, amqp.Config{
 		Heartbeat: 10 * time.Second,
-		Dial:      dialer.Dial,
+		Dial: func(network, address string) (net.Conn, error) {
+			opened, dialErr := dialer.DialContext(ctx, network, address)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			if err := opened.SetDeadline(connectionDeadline(ctx)); err != nil {
+				_ = opened.Close()
+				return nil, err
+			}
+			transportMu.Lock()
+			transport = opened
+			transportMu.Unlock()
+			if err := ctx.Err(); err != nil {
+				_ = opened.Close()
+				return nil, err
+			}
+			return opened, nil
+		},
 	})
 	if err != nil {
+		transportMu.Lock()
+		if transport != nil {
+			_ = transport.Close()
+			transport = nil
+		}
+		transportMu.Unlock()
 		return fmt.Errorf("connect RabbitMQ publisher: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		abortConnection(conn)
+		return err
+	}
+	transportMu.Lock()
+	if transport != nil {
+		err = transport.SetDeadline(connectionDeadline(ctx))
+	}
+	transportMu.Unlock()
+	if err != nil {
+		abortConnection(conn)
+		return fmt.Errorf("bound RabbitMQ channel setup: %w", err)
 	}
 	channel, err := conn.Channel()
 	if err != nil {
-		_ = conn.Close()
+		abortConnection(conn)
 		return fmt.Errorf("open RabbitMQ publisher channel: %w", err)
 	}
 	if err := channel.Confirm(false); err != nil {
-		_ = channel.Close()
-		_ = conn.Close()
+		abortConnection(conn)
 		return fmt.Errorf("enable RabbitMQ publisher confirmations: %w", err)
+	}
+	transportMu.Lock()
+	if transport != nil {
+		err = transport.SetDeadline(time.Time{})
+	}
+	transportMu.Unlock()
+	if err != nil {
+		abortConnection(conn)
+		return fmt.Errorf("clear RabbitMQ setup deadline: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		abortConnection(conn)
+		return err
 	}
 
 	p.conn = conn
@@ -238,15 +292,27 @@ func (p *ConfirmPublisher) connect(ctx context.Context) error {
 }
 
 func (p *ConfirmPublisher) reset() {
-	if p.channel != nil {
-		_ = p.channel.Close()
-		p.channel = nil
-	}
 	if p.conn != nil {
-		_ = p.conn.Close()
-		p.conn = nil
+		_ = p.conn.CloseDeadline(time.Now().Add(publisherCloseTimeout))
 	}
+	p.channel = nil
+	p.conn = nil
 	p.confirms = nil
 	p.returns = nil
 	p.closed = nil
+}
+
+func connectionDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(publisherDialTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		return contextDeadline
+	}
+	return deadline
+}
+
+func abortConnection(connection *amqp.Connection) {
+	if connection == nil || connection.IsClosed() {
+		return
+	}
+	_ = connection.CloseDeadline(time.Now())
 }
