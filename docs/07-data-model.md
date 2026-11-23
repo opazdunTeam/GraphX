@@ -82,7 +82,7 @@ flowchart LR
 
 ### Надёжная доставка
 
-`outbox_messages` хранит сообщения, которые нужно опубликовать после транзакции.
+`outbox_messages` хранит сообщения, которые нужно опубликовать после транзакции. `lease_token` и `lease_until` обозначают временную аренду строки конкретным publisher: PostgreSQL выдаёт доступные записи через `FOR UPDATE SKIP LOCKED`, а другой процесс может забрать запись только после истечения аренды. Успешная отправка фиксируется в `published_at` только после RabbitMQ confirm; при временной ошибке обновляются только счётчик попыток, `available_at` и `last_error`, бизнес-состояние задания не меняется.
 
 `consumed_messages` защищает consumer по паре `consumer_name + message_id` и является append-only до появления отдельной retention policy. Business payload outbox неизменяем, а после публикации неизменяема вся строка.
 

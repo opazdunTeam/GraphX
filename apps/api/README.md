@@ -10,7 +10,8 @@
 apps/api/
 ├── cmd/
 │   ├── api/                 запуск HTTP API
-│   └── consumer/            обработка результатов workers
+│   ├── consumer/            обработка результатов workers
+│   └── publisher/           публикация transactional outbox в RabbitMQ
 └── internal/
     ├── contractjson/         строгий I-JSON/JCS boundary общих контрактов
     ├── investigations/      жизненный цикл и этапы расследования
@@ -39,6 +40,7 @@ apps/api/
 
 - `cmd/api` собирает зависимости и запускает HTTP-сервер;
 - `cmd/consumer` сейчас запускает lifecycle scaffold; после подключения messaging runtime эта точка входа будет принимать результаты workers из RabbitMQ.
+- `cmd/publisher` читает только `outbox_messages`, публикует постоянные сообщения и фиксирует отправку после RabbitMQ confirm.
 
 ### Предметные модули
 
@@ -120,7 +122,7 @@ make check-api
 - `internal/ingestion` проверяет переносимую семантику результата: локальные ссылки, счётчики, temporal-правила, JCS digest и соответствие manifest;
 - проверки актуальности попытки и состояния задания выполняются consumer/orchestration перед сохранением в PostgreSQL.
 
-Transport-модели, schema registry и переносимые semantic validators уже реализованы и проверяются общими fixtures. Подключение RabbitMQ consumer/publisher и object storage остаётся отдельным этапом runtime-интеграции.
+Transport-модели, schema registry и переносимые semantic validators уже реализованы и проверяются общими fixtures. `cmd/publisher` подключён: он проверяет сохранённые команды по JSON Schema и публикует их с RabbitMQ confirm. Runtime-подключение consumer и object storage остаётся отдельным этапом.
 
 Go-структуры RabbitMQ и ingest не генерируются из JSON Schema в MVP. Сложные условия схем удобнее выразить в transport-моделях и доменном коде явно, а соответствие контролировать тестами на общих примерах из `contracts/examples`.
 
@@ -130,7 +132,7 @@ OpenAPI определяет HTTP transport и используется для �
 
 API использует только переменные окружения. Общий каталог переменных проекта и безопасные примеры находятся в корневом [`.env.example`](../../.env.example). Процесс API читает `APP_ENV`, `LOG_LEVEL`, `LOG_FORMAT`, `API_HTTP_ADDR`, `API_*_TIMEOUT`, `POSTGRES_*` и `INVESTIGATION_DEFAULT_*`/`INVESTIGATION_MAX_*`. `LOG_FORMAT` принимает `json` или `text`.
 
-Файл `.env` сам по себе приложением не читается: значения передаются процессу через shell, Compose или среду запуска. `POSTGRES_DSN` обязателен; остальные используемые параметры API и пула имеют проверяемые значения по умолчанию. Для локального smoke-запуска можно использовать тестовую PostgreSQL из `docker-compose.test.yaml`.
+Файл `.env` сам по себе приложением не читается: значения передаются процессу через shell, Compose или среду запуска. `POSTGRES_DSN` обязателен для API и publisher; publisher также требует `RABBITMQ_URL`. Остальные используемые параметры API и пула имеют проверяемые значения по умолчанию. Для локального smoke-запуска можно использовать тестовую PostgreSQL из `docker-compose.test.yaml`. Publisher по умолчанию ищет JSON Schema в `../../contracts/schemas` относительно `apps/api`; путь можно переопределить через `CONTRACTS_SCHEMA_DIR`.
 
 Команды ниже выполняются из корня репозитория после передачи переменных окружения процессу.
 
