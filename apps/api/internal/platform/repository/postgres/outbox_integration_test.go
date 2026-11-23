@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +33,7 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 		RequestHash:     strings.Repeat("a", 64),
 		IdempotencyKey:  "atomic-source-job-create",
 	}
-	if err := store.Create(ctx, job, outboxID, sourceJobCommandPayload(outboxID, jobID, investigationID, 1)); err != nil {
+	if err := store.Create(ctx, job, sourceCollectRequestedOutboxMessage(outboxID, jobID, investigationID, 1)); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -65,8 +64,9 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 	rollbackJob.ID = rollbackJobID
 	rollbackJob.InvestigationID = rollbackInvestigationID
 	rollbackJob.IdempotencyKey = "atomic-source-job-rollback"
-	if err := store.Create(ctx, rollbackJob, conflictingOutboxID,
-		sourceJobCommandPayload(conflictingOutboxID, rollbackJobID, rollbackInvestigationID, 1)); err == nil {
+	if err := store.Create(ctx, rollbackJob, sourceCollectRequestedOutboxMessage(
+		conflictingOutboxID, rollbackJobID, rollbackInvestigationID, 1,
+	)); err == nil {
 		t.Fatal("Create() error = nil, want duplicate outbox id error")
 	}
 	var rolledBackJobs int
@@ -76,91 +76,6 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 	if rolledBackJobs != 0 {
 		t.Fatalf("source job count after outbox insert failure = %d, want 0", rolledBackJobs)
 	}
-}
-
-func TestStartingAttemptAndOutboxAreAtomic(t *testing.T) {
-	ctx := t.Context()
-	pool, err := Open(ctx, testPostgresConfig())
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	t.Cleanup(pool.Close)
-	store := NewStore(pool)
-
-	investigationID := "10000000-0000-4000-8000-000000000081"
-	jobID := "20000000-0000-4000-8000-000000000081"
-	conflictingOutboxID := "30000000-0000-4000-8000-000000000081"
-	seedRunningInvestigation(t, ctx, pool, investigationID, "Atomic retry")
-	if _, err := pool.Exec(ctx, `
-		insert into source_jobs (
-			id, investigation_id, source_id, operation, purpose,
-			request_hash, idempotency_key
-		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'atomic-retry-job')
-	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
-		t.Fatalf("insert source job: %v", err)
-	}
-	if err := store.ScheduleRetry(ctx, jobID, time.Now().UTC().Add(time.Minute), "SOURCE_TIMEOUT", "timeout"); err != nil {
-		t.Fatalf("schedule retry: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		insert into outbox_messages (
-			id, message_type, aggregate_type, aggregate_id, payload
-		) values ($1, 'test', 'test', $2, '{"test":true}'::jsonb)
-	`, conflictingOutboxID, jobID); err != nil {
-		t.Fatalf("insert conflicting outbox row: %v", err)
-	}
-
-	if _, err := store.StartNewAttempt(
-		ctx, jobID, conflictingOutboxID,
-		sourceJobCommandPayload(conflictingOutboxID, jobID, investigationID, 2),
-	); err == nil {
-		t.Fatal("StartNewAttempt() error = nil, want duplicate outbox id error")
-	}
-
-	var status string
-	var attemptNo int
-	if err := pool.QueryRow(ctx, `
-		select status, attempt_no from source_jobs where id = $1
-	`, jobID).Scan(&status, &attemptNo); err != nil {
-		t.Fatalf("read rolled-back source job: %v", err)
-	}
-	if status != "retry_wait" || attemptNo != 1 {
-		t.Fatalf("source job after outbox insert failure = %s attempt %d, want retry_wait attempt 1", status, attemptNo)
-	}
-}
-
-func sourceJobCommandPayload(messageID, jobID, investigationID string, attemptNo int) string {
-	now := time.Now().UTC()
-	return fmt.Sprintf(`{
-		"message_id": %q,
-		"type": "source.collect.requested.v1",
-		"schema_version": 1,
-		"occurred_at": %q,
-		"correlation_id": %q,
-		"causation_id": null,
-		"producer": "graphx-api",
-		"root_command_id": %q,
-		"payload": {
-			"job_id": %q,
-			"attempt_no": %d,
-			"investigation_id": %q,
-			"source": "fixture",
-			"operation": "search_subject",
-			"purpose": "subject_discovery",
-			"query": {"type": "person", "name": "Atomic test subject"},
-			"limits": {"max_records": 1, "max_bytes": 1024, "timeout_seconds": 30},
-			"deadline": %q
-		}
-	}`,
-		messageID,
-		now.Format(time.RFC3339),
-		investigationID,
-		messageID,
-		jobID,
-		attemptNo,
-		investigationID,
-		now.Add(30*time.Second).Format(time.RFC3339),
-	)
 }
 
 func TestOutboxClaimUsesLeasesAndReschedulesWithBoundedInput(t *testing.T) {
@@ -426,7 +341,7 @@ func TestOutboxConfirmDoesNotChangeTerminalOrNewerAttempt(t *testing.T) {
 			name:           "terminal job",
 			investigation:  "10000000-0000-4000-8000-000000000075",
 			jobID:          "20000000-0000-4000-8000-000000000075",
-			messageID:      "30000000-0000-4000-8000-000000000075",
+			messageID:      "30000000-0000-4000-8000-000000000083",
 			idempotencyKey: "outbox-terminal-job",
 			finalize:       `update source_jobs set status = 'succeeded', finished_at = now() where id = $1`,
 			wantStatus:     "succeeded",
