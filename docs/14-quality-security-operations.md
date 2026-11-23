@@ -23,7 +23,7 @@ CI требует зафиксированные `go.sum`, `uv.lock` и `pnpm-lo
 
 Go HTTP runtime пишет структурированные логи в настроенном формате `json` или `text` с `service` и `request_id`, а access log также содержит метод, шаблон маршрута, HTTP status и длительность. Логи предметных операций дополняются `investigation_id`, `job_id`, source и message id; `correlation_id` используется на messaging-границе. Секреты, полные документы, panic value и лишние персональные данные в лог не попадают.
 
-Worker и adapter логи содержат только скалярные operational metadata из явного allowlist; остальные context-поля отбрасываются, а structured values закрываются целиком. Raw payload, HTTP headers/body, credentials, URL/URI, полные документы и лишние персональные данные запрещено передавать как сообщение или structured context; исходный ответ сохраняется как artifact. Formatter дополнительно редактирует известные чувствительные поля и ограничивает размер значений и события, но это является защитой границы, а не разрешением логировать исходные данные.
+Worker и adapter логи содержат только скалярные operational metadata из явного allowlist; остальные context-поля отбрасываются, а structured values закрываются целиком. Raw payload, HTTP headers/body, credentials, raw URL/URI, полные документы и лишние персональные данные запрещено передавать как сообщение или structured context; исходный ответ сохраняется как artifact. Artifact reference содержит только канонический HTTP(S) `source_uri` без userinfo, query и fragment и HTTP metadata из безопасного allowlist. Formatter дополнительно редактирует известные чувствительные поля и ограничивает размер значений и события, но это является защитой границы, а не разрешением логировать исходные данные.
 
 Минимальные метрики:
 
@@ -85,9 +85,13 @@ Go-процессы получают настройки через окруже�
 
 ## MinIO
 
-MinIO пока не входит в готовое локальное окружение: Docker Compose ещё не добавлен. Когда появится первый сквозной контур с сохранением artifacts, MinIO будет запускаться через Compose и хранить данные в отдельном volume. Worker записывает объект, вычисляет SHA-256 и не заменяет его другим содержимым. `S3_ALLOW_OVERWRITE=false` остаётся безопасным значением по умолчанию.
+Изолированный MinIO integration harness находится в `workers/docker-compose.test.yaml`; production Compose по-прежнему не добавляется до появления полного вертикального среза. Worker вычисляет SHA-256 в bounded spool, выполняет только conditional PUT с `If-None-Match: *` и никогда не заменяет существующий key. Совпадение после concurrent/uncertain PUT и recovery подтверждается потоковым пересчётом фактического тела; пользовательская S3 metadata не считается доказательством целостности. Видимость результата 409 ожидается с bounded exponential backoff в пределах `S3_RECONCILIATION_TIMEOUT`. PUT выполняется daemon-операцией, которая владеет spool до прекращения чтения. После отмены runtime ждёт регистрацию только в bounded drain-окне; повторная отмена или истечение окна немедленно дают uncertain infrastructure outcome. Delivery возвращается в очередь без terminal receipt, а graceful shutdown не обязан ждать зависший SDK-вызов. `S3_ALLOW_OVERWRITE=true` считается ошибкой конфигурации, а не рабочим режимом.
 
-Подробные команды запуска и создания bucket должны находиться в `deploy/README.md` рядом с Compose, когда окружение будет готово. Документация не должна обещать команды, которых ещё нет в репозитории.
+Неоднозначные PUT-ответы (`409`, `412`, retryable `5xx`, timeout и throttling) проходят один bounded reconciliation path. Reconciliation повторяет только временный 404, transport failure и retryable service error; `AccessDenied` и другие definitive HEAD errors сохраняют fatal-классификацию. Остальные service/configuration errors являются fatal runtime errors: команда возвращается в очередь, readiness снимается и consumer останавливается. Подтверждённая infrastructure failure имеет приоритет над одновременной cancellation/deadline. GET, streaming read и close принадлежат одному daemon worker с bounded chunk queue. Общий лимит `S3_MAX_INFLIGHT_OPERATIONS` учитывает операции до фактического завершения blocking SDK lifecycle, при настроенном storage не может быть ниже `WORKER_CONCURRENCY`; его исчерпание также останавливает consumer и не допускает накопления detached потоков и spool-файлов.
+
+Локально versioning необязателен. При `S3_REQUIRE_VERSIONING=true` startup/readiness принимает только bucket со статусом `Enabled`; versioning не заменяет conditional PUT. Незавершённые multipart uploads должны иметь bucket lifecycle cleanup, а сроки удаления зарегистрированных evidence objects задаются отдельной retention policy до работы с реальными чувствительными материалами.
+
+Тестовый образ MinIO закреплён release tag и digest. Команды integration harness описаны в `deploy/README.md` и `workers/README.md`.
 
 ## Развёртывание
 

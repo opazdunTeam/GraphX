@@ -57,6 +57,47 @@ func TestSchemaRegistryAcceptsSharedMessageFixtures(t *testing.T) {
 	}
 }
 
+func TestCompletedDecodeAcceptsEquivalentRecordCountToken(t *testing.T) {
+	root := testRepositoryRoot(t)
+	registry, err := NewSchemaRegistry(filepath.Join(root, "contracts", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(
+		root, "contracts", "examples", "messages", "source-collect-completed.v1.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte(`"record_count": 1`), []byte(`"record_count": 1e0`), 1)
+	message, err := registry.ValidateMessage(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelope, err := Decode[ingestion.SourceResult](message, SourceCollectCompletedType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Payload.RecordCount != 1 {
+		t.Fatalf("record_count = %d, want 1", envelope.Payload.RecordCount)
+	}
+	if err := ingestion.ValidateSourceResult(envelope.Payload, message.Payload); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompletedDecodeRejectsInexactRecordCountToken(t *testing.T) {
+	raw := []byte(
+		`{"type":"source.collect.completed.v1","payload":{"record_count":1.00000000000000001}}`,
+	)
+	message := ValidatedMessage{Type: SourceCollectCompletedType, Raw: raw}
+
+	if _, err := Decode[ingestion.SourceResult](message, SourceCollectCompletedType); err == nil {
+		t.Fatal("expected inexact record_count to be rejected")
+	}
+}
+
 func TestSchemaRegistryRejectsUnknownVersionAndInvalidFormats(t *testing.T) {
 	root := testRepositoryRoot(t)
 	registry, err := NewSchemaRegistry(filepath.Join(root, "contracts", "schemas"))

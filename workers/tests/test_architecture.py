@@ -1,8 +1,18 @@
 import ast
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "graphx_workers"
-FORBIDDEN_INFRASTRUCTURE = {"aio_pika", "aiormq", "asyncpg", "pika", "psycopg"}
+FORBIDDEN_INFRASTRUCTURE = {
+    "aio_pika",
+    "aiormq",
+    "asyncpg",
+    "boto3",
+    "botocore",
+    "minio",
+    "pika",
+    "psycopg",
+}
 
 
 def test_sdk_and_source_adapters_do_not_import_transport_or_database_clients() -> None:
@@ -19,5 +29,36 @@ def test_sdk_and_source_adapters_do_not_import_transport_or_database_clients() -
                 for module in imported:
                     if module.split(".", maxsplit=1)[0] in FORBIDDEN_INFRASTRUCTURE:
                         violations.append(f"{path.relative_to(ROOT)} imports {module}")
+
+    assert not violations, "\n".join(violations)
+
+
+def test_source_adapters_depend_only_on_public_sdk_and_their_own_package() -> None:
+    violations: list[str] = []
+    sources = ROOT / "sources"
+    for path in sources.rglob("*.py"):
+        relative = path.relative_to(sources)
+        own_package = (
+            "graphx_workers.sources"
+            if len(relative.parts) == 1
+            else f"graphx_workers.sources.{relative.parts[0]}"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules = [node.module]
+            for module in modules:
+                if module.split(".", maxsplit=1)[0] in sys.stdlib_module_names:
+                    continue
+                if (
+                    module == "graphx_workers.sdk"
+                    or module == own_package
+                    or module.startswith(f"{own_package}.")
+                ):
+                    continue
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
 
     assert not violations, "\n".join(violations)

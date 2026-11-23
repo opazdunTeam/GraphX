@@ -5,33 +5,21 @@ import asyncio
 import logging
 import signal
 from collections.abc import Sequence
-from datetime import datetime
-from uuid import UUID
 
 from graphx_workers.config import WorkerKind, WorkerSettings
 from graphx_workers.contracts.schema import ContractSchemaRegistry
+from graphx_workers.runtime.context import ArtifactContextFactory
+from graphx_workers.runtime.finalization import ManifestResultFinalizer
 from graphx_workers.runtime.logging import configure_logging
 from graphx_workers.runtime.processor import (
-    AdapterContextFactory,
-    RuntimeAdapterContext,
+    AdapterRegistration,
     SourceCommandProcessor,
 )
 from graphx_workers.runtime.rabbitmq import SourceRabbitRuntime
 from graphx_workers.runtime.replay import FileTerminalReplayStore
+from graphx_workers.runtime.s3 import build_artifact_store
 from graphx_workers.runtime.terminal import TerminalMessageFactory
-
-
-class UnconfiguredContextFactory(AdapterContextFactory):
-    async def create(
-        self,
-        *,
-        job_id: UUID,
-        attempt_no: int,
-        correlation_id: UUID,
-        deadline: datetime,
-    ) -> RuntimeAdapterContext:
-        del job_id, attempt_no, correlation_id, deadline
-        raise RuntimeError("adapter context is not configured")
+from graphx_workers.sources.fixture import FixtureAdapter
 
 
 def build_parser(kind: WorkerKind) -> argparse.ArgumentParser:
@@ -70,6 +58,17 @@ async def run_forever(settings: WorkerSettings, logger: logging.Logger) -> None:
 
 async def run_source_worker(settings: WorkerSettings, logger: logging.Logger) -> None:
     registry = ContractSchemaRegistry(settings.resolve_contract_schema_root())
+    artifact_store = build_artifact_store(settings)
+    await artifact_store.check_ready()
+    logger.info(
+        "immutable artifact storage ready",
+        extra={
+            "context": {
+                "object_store_configured": True,
+                "object_store_requires_versioning": settings.s3_require_versioning,
+            }
+        },
+    )
     replay_store = FileTerminalReplayStore(
         settings.terminal_replay_root,
         retention=settings.terminal_replay_retention,
@@ -92,9 +91,18 @@ async def run_source_worker(settings: WorkerSettings, logger: logging.Logger) ->
         registry,
         TerminalMessageFactory(registry),
         replay_store,
-        UnconfiguredContextFactory(),
-        (),
+        ArtifactContextFactory(artifact_store, settings, logger),
+        (AdapterRegistration(adapter=FixtureAdapter()),),
         job_timeout=settings.worker_job_timeout,
+        result_finalizer=ManifestResultFinalizer(
+            registry,
+            inline_max_bytes=settings.source_result_inline_max_bytes,
+            manifest_max_bytes=settings.source_result_manifest_max_bytes,
+            terminal_max_bytes=settings.source_result_terminal_max_bytes,
+            max_scalar_chars=settings.source_result_max_scalar_chars,
+            max_total_scalar_chars=settings.source_result_max_total_scalar_chars,
+            max_json_nodes=settings.source_result_max_json_nodes,
+        ),
         logger=logger,
     )
     runtime = SourceRabbitRuntime(

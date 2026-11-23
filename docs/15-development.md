@@ -44,6 +44,14 @@ go run ./cmd/api
 ```
 
 ```powershell
+# Отдельный publisher process; PostgreSQL и RabbitMQ должны быть доступны
+cd apps/api
+$env:POSTGRES_DSN = "postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable"
+$env:RABBITMQ_URL = "amqp://graphx:change-me@localhost:5672/graphx"
+go run ./cmd/publisher
+```
+
+```powershell
 cd workers
 uv sync
 uv run graphx-source-worker --check
@@ -62,6 +70,14 @@ cd apps/api
 export POSTGRES_DSN='postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable'
 docker compose -f docker-compose.test.yaml up -d --wait
 go run ./cmd/api
+```
+
+```bash
+# Отдельный publisher process; PostgreSQL и RabbitMQ должны быть доступны
+cd apps/api
+export POSTGRES_DSN='postgres://test_user:test_password@localhost:5433/graphx_test?sslmode=disable'
+export RABBITMQ_URL='amqp://graphx:change-me@localhost:5672/graphx'
+go run ./cmd/publisher
 ```
 
 ```bash
@@ -142,4 +158,4 @@ cd ../api
 make test-integration
 ```
 
-CI до восстановления кеша проверяет наличие `go.sum`, `uv.lock` и `pnpm-lock.yaml`, а после проверок требует отсутствие tracked-изменений и неожиданных untracked-файлов. Python job поднимает изолированный RabbitMQ 4.2, собирает production worker image через `uv sync --locked`, проводит command→result через сам контейнер и проверяет confirm/ACK, broker NACK, потерю AMQP-соединения до confirm, межпроцессный claim, repeat delivery, concurrency и graceful shutdown. После проверки тестовое окружение всегда удаляется. OpenAPI lint входит в `pnpm check`; Go- и TypeScript-генераторы повторно обрабатывают единый `contracts/openapi.yaml` и проверяют ключевую форму generated-типов. Прямой push в `develop` разрешён и запускает полный CI. В `main` изменения попадают только через Pull Request после обязательных checks `Go`, `Python`, `Web` и `PostgreSQL`.
+CI до восстановления кеша проверяет наличие `go.sum`, `uv.lock` и `pnpm-lock.yaml`, а после проверок требует отсутствие tracked-изменений и неожиданных untracked-файлов. Python job поднимает изолированные RabbitMQ 4.2 и MinIO, собирает production worker image через `uv sync --locked`, проводит command→result через сам контейнер и проверяет confirm/ACK, broker NACK, потерю AMQP-соединения до confirm, межпроцессный claim, repeat delivery, concurrency, graceful shutdown, immutable conditional upload, streaming download, conflict и обязательное versioning. После проверки тестовое окружение всегда удаляется. OpenAPI lint входит в `pnpm check`; Go- и TypeScript-генераторы повторно обрабатывают единый `contracts/openapi.yaml` и проверяют ключевую форму generated-типов. Прямой push в `develop` разрешён и запускает полный CI. В `main` изменения попадают только через Pull Request после обязательных checks `Go`, `Python`, `Web` и `PostgreSQL`.

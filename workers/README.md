@@ -60,6 +60,11 @@ MinIO- или HTTP-реализаций: он объявляет только м
 или digest: adapter возвращает содержательные artifacts/records/claims, а transport packaging
 выполняет runtime после успешного завершения adapter.
 
+Каждый source adapter объявляет immutable `AdapterMetadata` с source, version и supported
+operations. Runtime строит регистрацию из этой metadata, проверяет operation до вызова адаптера и
+не принимает успешный результат с другой adapter version. Ручное дублирование identity при
+регистрации запрещено, поэтому completed и failed сообщения используют согласованную provenance.
+
 ## Использование контрактов
 
 Общие RabbitMQ- и ingest-контракты находятся в [`contracts/schemas`](../contracts/schemas), а полные примеры - в [`contracts/examples`](../contracts/examples). Они задают переносимую границу между Python workers и Go, но не описывают ответы конкретных источников.
@@ -82,8 +87,9 @@ Pydantic-модели workers располагаются в `src/graphx_workers/
 Доступны три тонких entrypoint с общим runtime. Это режимы развёртывания одного Python-пакета,
 а не три независимых набора контрактов. В MVP обязательны только `source.collect.*`; отдельные
 `document.parse.*` и `browser.collect.*` не вводятся, пока для них не появятся собственные очередь
-или процессная необходимость. Каталоги `sources`, `documents` и `normalization` остаются без
-прикладной реализации до появления первого использующего их вертикального среза.
+или процессная необходимость. В `sources/fixture` находится детерминированный fixture-адаптер;
+каталоги `documents` и `normalization` остаются без прикладной реализации до появления первого
+использующего их вертикального среза.
 
 Все команды ниже выполняются из корня репозитория.
 
@@ -127,7 +133,30 @@ uv run python tools/integrationtest.py
 
 `TERMINAL_REPLAY_RETENTION` по умолчанию равен 30 суткам и не может быть меньше суток. Cleanup удаляет только entries за пределами окна со свободным claim; возраст команды сам по себе не запрещает обработку. Настройки `TERMINAL_REPLAY_MAX_ENTRIES`, `TERMINAL_REPLAY_MAX_BYTES` и `TERMINAL_REPLAY_MAX_ENTRY_BYTES` ограничивают journal. Общая нехватка capacity возвращает delivery в очередь и останавливает consumer с ошибкой, чтобы команда не потерялась и не образовала горячий retry loop. Oversized terminal заменяется компактным `CONTRACT_VALIDATION_FAILED` только если в него помещаются реальная версия адаптера и все сохранённые artifacts; частичный список не публикуется, а невозможность сохранить полный failure переводит runtime в capacity-fatal режим. Hot path использует атомарный metadata index, а полный обход каталога выполняется только при cleanup/reconciliation. Journal не заменяет immutable artifact storage: смерть процесса после внешнего запроса, но до terminal result допускает последовательный повтор, поэтому artifact key и проверка hash остаются обязательной частью #11.
 
-До задачи fixture-адаптера registry источников пуст: валидная команда получает стабильный `SOURCE_UNSUPPORTED_OPERATION`, а не остаётся незавершённой. Immutable artifact storage и manifest finalizer подключаются отдельным инфраструктурным срезом; transport runtime не получает доступ к PostgreSQL. Document и browser entrypoints пока остаются явными scaffold-процессами.
+Immutable storage использует key `artifacts/v1/{job_id}/{attempt_no}/{encoded-local-ref}` и conditional S3 PUT. Content сначала проходит bounded spool для SHA-256, размера и byte limit, затем передаётся клиенту потоком. Повтор того же key успешен только при совпадении фактических bytes, hash и размера; metadata первого writer остаётся авторитетной, другое содержимое даёт conflict без перезаписи. Участок PUT/reconciliation/регистрации cancellation-safe: daemon-операция владеет spool до прекращения чтения, а первая отмена получает короткое bounded drain-окно для регистрации подтверждённого artifact. Истечение окна или повторная отмена дают uncertain outcome и NACK без terminal result; worker shutdown не ждёт зависший SDK-поток. `source_uri` передаётся как стабильный канонический HTTP(S) URI, включая bracketed IPv6, но без userinfo, query и fragment: resource identifiers из query адаптер обязан перенести в безопасный path-based canonical URI либо не сохранять такой адрес как provenance. HTTP metadata ограничена безопасным allowlist. `original_filename` хранится только как очищенная metadata, а parent задаётся локальной ссылкой. При восстановлении session перечисляет префикс попытки, потоково проверяет фактический SHA-256 каждого объекта и включает найденные references в полный terminal result. Download доступен только для точной ссылки, зарегистрированной текущей session, и выдаёт данные после проверки целостности через bounded spool.
+
+GET/read/close выполняются одним владеющим daemon worker и передают chunks через bounded очередь; cancellation прекращает потребление, но не закрывает body параллельно с `read`. `S3_MAX_INFLIGHT_OPERATIONS` ограничивает все живые SDK operations, включая detached вызовы, и при настроенном storage не может быть ниже `WORKER_CONCURRENCY`. Slot освобождается только после фактического завершения blocking lifecycle; исчерпание лимита и постоянные ошибки конфигурации object store приводят к NACK и остановке consumer, а не к adapter terminal result или hot requeue loop. Подтверждённая infrastructure failure имеет приоритет над одновременной cancellation/deadline.
+
+`sources/fixture` реализует не использующий сеть synthetic adapter для проверки полного SDK/runtime
+контракта. Он поддерживает `search_subject` для `person`; идентификатор `fixture_case` выбирает
+детерминированный сценарий `success`, `not_found`, `transient` или `permanent`. Сырые ответы
+сохраняются через `AdapterContext.save_artifact` до parsing/mapping. Fixture не содержит реальных
+персональных данных и не обращается к RabbitMQ, PostgreSQL или object storage напрямую.
+
+Production registry source worker включает fixture-адаптер. Runtime создаёт для попытки
+MinIO-backed context, восстанавливает ранее сохранённые objects и сверяет возвращённые адаптером
+ссылки с зарегистрированными artifacts. `SOURCE_RESULT_INLINE_MAX_BYTES` задаёт предварительный
+порог тела `SourceResult`, после которого runtime дополнительно проверяет полный terminal envelope
+в точном replay-формате. Крупный успешный результат потоково сохраняется как JSON manifest под
+детерминированным immutable key; `SOURCE_RESULT_MANIFEST_MAX_BYTES` ограничивает его 16 MiB и не
+может быть ниже inline threshold. Отдельный terminal payload limit применяется до JCS digest и
+защищает также inline `not_found` и warnings manifest-результата. Scalar/node limits применяются к окончательному содержимому вместе
+с recovered artifacts до reconciliation и повторно после него, а source-only concurrency-aware
+serialization budget ограничивает временную память процесса. Source-конфигурация обязана разрешать `application/json`
+для runtime manifest. RabbitMQ получает только manifest reference, исходные artifact references и версии обработки.
+`not_found` всегда остаётся inline. Transport runtime не получает доступ к
+PostgreSQL; регистрация результата принадлежит Go consumer. Document и browser entrypoints пока
+остаются явными scaffold-процессами.
 
 Production image собирается из корня репозитория, чтобы сохранить единый источник JSON Schema:
 
@@ -135,6 +164,6 @@ Production image собирается из корня репозитория, ч
 docker build -f workers/Dockerfile .
 ```
 
-Production image устанавливает runtime и все транзитивные зависимости через `uv sync --locked --no-dev` из committed `uv.lock`. `tools/integrationtest.py` поднимает изолированный RabbitMQ, собирает этот image, проводит через контейнер реальный command→failed-result flow, а затем проверяет confirm/ACK, broker NACK, физический разрыв AMQP-соединения до confirm, concurrency и graceful shutdown. После проверки контейнеры, сеть и volume удаляются. Обычный `pytest` пропускает broker-тесты без `RABBITMQ_TEST_URL`.
+Production image устанавливает runtime и все транзитивные зависимости через `uv sync --locked --no-dev` из committed `uv.lock`. `tools/integrationtest.py` поднимает изолированные RabbitMQ и MinIO, собирает этот image, проводит через контейнер реальный command→manifest-result flow, проверяет stored original, manifest schema/semantics и exact duplicate replay, а затем проверяет confirm/ACK, broker NACK, физический разрыв AMQP-соединения до confirm, concurrency, graceful shutdown, immutable streaming upload/download, concurrent retry, conflict, recovery и обязательное versioning. После проверки контейнеры, сеть и volume удаляются. Обычный `pytest` пропускает infrastructure-тесты без `RABBITMQ_TEST_URL` и `MINIO_TEST_URL`.
 
 См. [контракт адаптера](../docs/10-source-adapters.md) и [сообщения RabbitMQ](../docs/09-messaging.md).

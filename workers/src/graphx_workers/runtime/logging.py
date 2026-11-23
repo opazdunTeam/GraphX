@@ -50,6 +50,7 @@ _ALLOWED_CONTEXT_FIELDS = frozenset(
         "message_id",
         "normalization_version",
         "object_store_configured",
+        "object_store_requires_versioning",
         "occurred_at",
         "operation",
         "outcome",

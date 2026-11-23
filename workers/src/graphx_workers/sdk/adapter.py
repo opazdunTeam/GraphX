@@ -1,18 +1,44 @@
 """Stable adapter boundary; transport and infrastructure stay in the runtime."""
 
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from graphx_workers.contracts.artifacts import ArtifactReference
 from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.messages import CollectLimits, SourceQuery
 from graphx_workers.contracts.records import SourceRecord
 from graphx_workers.contracts.results import validate_result_content
+from graphx_workers.contracts.schema import validate_raw_locator_numbers
+from graphx_workers.contracts.values import validate_persisted_text
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterMetadata:
+    """Immutable source identity and capabilities declared by an adapter."""
+
+    source: str
+    version: str
+    supported_operations: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, str) or not isinstance(self.version, str):
+            raise TypeError("adapter source and version must be strings")
+        validate_persisted_text(self.source, "adapter source")
+        validate_persisted_text(self.version, "adapter version")
+        if not isinstance(self.supported_operations, frozenset):
+            raise TypeError("adapter supported_operations must be a frozenset")
+        if any(not isinstance(operation, str) for operation in self.supported_operations):
+            raise TypeError("adapter supported operations must be strings")
+        if not self.supported_operations or any(
+            not operation for operation in self.supported_operations
+        ):
+            raise ValueError("adapter must declare non-empty supported operations")
 
 
 class CollectRequest(BaseModel):
@@ -41,6 +67,34 @@ class CollectResult(BaseModel):
     records: list[SourceRecord] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validate_raw_locator_numbers(json_data)
+        return super().model_validate_json(
+            json_data,
+            strict=strict,
+            extra=extra,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+    @field_validator(
+        "adapter_version", "parser_version", "mapping_version", "normalization_version"
+    )
+    @classmethod
+    def validate_versions(cls, value: str) -> str:
+        return validate_persisted_text(value, "result versions")
 
     @model_validator(mode="after")
     def validate_content(self) -> Self:
@@ -106,18 +160,25 @@ class AdapterContext(Protocol):
 
     async def save_artifact(
         self,
-        content: bytes,
+        content: bytes | AsyncIterable[bytes],
         media_type: str,
         *,
+        local_ref: str,
         kind: Literal["raw_response", "document", "screenshot", "other"],
         source_uri: str,
         retrieved_at: AwareDatetime,
         published_at: AwareDatetime | None = None,
         http_metadata: dict[str, str] | None = None,
+        original_filename: str | None = None,
+        parent_local_ref: str | None = None,
     ) -> ArtifactReference: ...
+
+    def download_artifact(self, reference: ArtifactReference) -> AsyncIterator[bytes]: ...
 
 
 class SourceAdapter(Protocol):
+    metadata: AdapterMetadata
+
     async def collect(
         self,
         request: CollectRequest,

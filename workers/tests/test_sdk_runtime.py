@@ -1,11 +1,14 @@
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from uuid import uuid4
+from typing import cast
+from uuid import UUID, uuid4
 
 import pytest
+import rfc8785
 from pydantic import AnyUrl, ValidationError
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.claims import Claim
 from graphx_workers.contracts.errors import ERROR_CLASSIFICATION, ErrorClassification, ErrorCode
 from graphx_workers.contracts.messages import (
@@ -21,18 +24,63 @@ from graphx_workers.contracts.results import (
 )
 from graphx_workers.runtime.requests import to_collect_request
 from graphx_workers.runtime.results import (
+    ManifestTooLargeError,
+    ResultTooComplexError,
     build_inline_source_result,
     build_manifest_source_result,
+    finalize_inline_source_result,
+    prepare_inline_source_result,
     prepare_manifest,
+    validate_result_serialization_limits,
 )
-from graphx_workers.sdk import CollectRequest, CollectResult
+from graphx_workers.sdk import AdapterMetadata, CollectRequest, CollectResult
+
+JOB_ID = UUID("22222222-2222-4222-8222-222222222222")
 
 
-def source_artifact() -> ArtifactReference:
+def test_adapter_metadata_requires_deeply_immutable_operations() -> None:
+    mutable_operations = {"collect"}
+    with pytest.raises(TypeError, match="must be a frozenset"):
+        AdapterMetadata(
+            source="fixture",
+            version="fixture/1",
+            supported_operations=cast(frozenset[str], mutable_operations),
+        )
+
+    metadata = AdapterMetadata(
+        source="fixture",
+        version="fixture/1",
+        supported_operations=frozenset({"collect"}),
+    )
+    with pytest.raises(AttributeError):
+        metadata.supported_operations.add("unexpected")  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        cast(frozenset[str], "collect"),
+        cast(frozenset[str], frozenset({"collect", 1})),
+    ],
+)
+def test_adapter_metadata_rejects_invalid_operation_collections(
+    operations: frozenset[str],
+) -> None:
+    with pytest.raises(TypeError):
+        AdapterMetadata(
+            source="fixture",
+            version="fixture/1",
+            supported_operations=operations,
+        )
+
+
+def source_artifact(
+    job_id: UUID = JOB_ID, *, local_ref: str = "artifact:raw:1"
+) -> ArtifactReference:
     return ArtifactReference(
-        local_ref="artifact:raw:1",
+        local_ref=local_ref,
         kind="raw_response",
-        object_key="fixture/response.json",
+        object_key=artifact_object_key(job_id, 1, local_ref),
         sha256="a" * 64,
         media_type="application/json",
         byte_size=2,
@@ -43,14 +91,14 @@ def source_artifact() -> ArtifactReference:
     )
 
 
-def collected_result() -> CollectResult:
+def collected_result(job_id: UUID = JOB_ID) -> CollectResult:
     return CollectResult(
         outcome="succeeded",
         adapter_version="fixture-adapter/1",
         parser_version="fixture-parser/1",
         mapping_version="fixture-mapper/1",
         normalization_version="normalization/1",
-        artifacts=[source_artifact()],
+        artifacts=[source_artifact(job_id)],
         records=[
             SourceRecord(
                 local_ref="person:1",
@@ -82,6 +130,30 @@ def collected_result() -> CollectResult:
         ],
         warnings=[],
     )
+
+
+def test_collect_result_json_rejects_inexact_nested_locator_token() -> None:
+    raw = (
+        collected_result()
+        .model_dump_json()
+        .replace('"json_pointer":"/name"', '"csv_row":1.00000000000000001')
+    )
+
+    with pytest.raises(ValueError, match="exact safe integer"):
+        CollectResult.model_validate_json(raw)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["adapter_version", "parser_version", "mapping_version", "normalization_version"],
+)
+@pytest.mark.parametrize("value", [" \t", "\u001c", "\u00a0", "v\x00x"])
+def test_collect_result_rejects_invalid_versions(field: str, value: str) -> None:
+    payload = collected_result().model_dump()
+    payload[field] = value
+
+    with pytest.raises(ValidationError, match="result versions"):
+        CollectResult.model_validate(payload)
 
 
 def test_adapter_request_is_independent_from_transport_metadata() -> None:
@@ -123,7 +195,7 @@ def test_error_catalog_is_shared_with_transport_model() -> None:
 
 def test_runtime_builds_valid_inline_result_and_digest() -> None:
     collected = collected_result()
-    result = build_inline_source_result(uuid4(), 1, collected)
+    result = build_inline_source_result(JOB_ID, 1, collected)
     validate_source_result_semantics(result)
     assert result.record_count == 1
     assert result.manifest is None
@@ -137,20 +209,35 @@ def test_inline_finalization_revalidates_mutated_collection() -> None:
     collected.artifacts.append(collected.artifacts[0].model_copy(deep=True))
 
     with pytest.raises(ValueError, match="artifact local_ref values must be unique"):
-        build_inline_source_result(uuid4(), 1, collected)
+        build_inline_source_result(JOB_ID, 1, collected)
 
 
-def test_runtime_owns_manifest_serialization_and_finalization() -> None:
+def test_artifact_parent_references_are_resolved_and_acyclic() -> None:
+    child = source_artifact(local_ref="artifact:child").model_copy(
+        update={"parent_local_ref": "artifact:raw:1"}
+    )
+    collected = collected_result().model_copy(update={"artifacts": [source_artifact(), child]})
+    build_inline_source_result(JOB_ID, 1, collected)
+
+    cyclic_parent = source_artifact().model_copy(update={"parent_local_ref": "artifact:child"})
+    cyclic_child = child.model_copy(update={"parent_local_ref": "artifact:raw:1"})
+    with pytest.raises(ValueError, match="cycle"):
+        CollectResult(**{**collected.model_dump(), "artifacts": [cyclic_parent, cyclic_child]})
+
+
+@pytest.mark.asyncio
+async def test_runtime_owns_manifest_serialization_and_finalization() -> None:
     job_id = uuid4()
-    collected = collected_result()
-    prepared = prepare_manifest(job_id, 1, collected)
+    collected = collected_result(job_id)
+    prepared = prepare_manifest(job_id, 1, collected, max_bytes=1024 * 1024)
+    content = b"".join([chunk async for chunk in prepared.iter_bytes()])
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
-        object_key="fixture/result-manifest.json",
-        sha256=sha256(prepared.content).hexdigest(),
+        object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
+        sha256=sha256(content).hexdigest(),
         media_type="application/json",
-        byte_size=len(prepared.content),
+        byte_size=len(content),
         source_uri=AnyUrl("https://example.test/subject/1"),
         retrieved_at=datetime.now(UTC),
         published_at=None,
@@ -159,22 +246,24 @@ def test_runtime_owns_manifest_serialization_and_finalization() -> None:
 
     result = build_manifest_source_result(job_id, 1, collected, prepared, reference)
     validate_source_result_semantics(result)
-    validate_manifest_semantics(result, prepared.document, prepared.content)
+    validate_manifest_semantics(result, prepared.document, content)
     assert not result.records
     assert not result.claims
 
 
-def test_manifest_finalization_rejects_a_different_collection_with_same_count() -> None:
+@pytest.mark.asyncio
+async def test_manifest_finalization_rejects_a_different_collection_with_same_count() -> None:
     job_id = uuid4()
-    original = collected_result()
-    prepared = prepare_manifest(job_id, 1, original)
+    original = collected_result(job_id)
+    prepared = prepare_manifest(job_id, 1, original, max_bytes=1024 * 1024)
+    content = b"".join([chunk async for chunk in prepared.iter_bytes()])
     reference = ArtifactReference(
         local_ref="artifact:manifest:1",
         kind="manifest",
-        object_key="fixture/result-manifest.json",
-        sha256=sha256(prepared.content).hexdigest(),
+        object_key=artifact_object_key(job_id, 1, "artifact:manifest:1"),
+        sha256=sha256(content).hexdigest(),
         media_type="application/json",
-        byte_size=len(prepared.content),
+        byte_size=len(content),
         source_uri=AnyUrl("https://example.test/subject/1"),
         retrieved_at=datetime.now(UTC),
         published_at=None,
@@ -186,6 +275,49 @@ def test_manifest_finalization_rejects_a_different_collection_with_same_count() 
     with pytest.raises(ValueError, match="does not belong"):
         build_manifest_source_result(job_id, 1, different, prepared, reference)
 
-    tampered = prepared.__class__(document=prepared.document, content=prepared.content + b" ")
-    with pytest.raises(ValueError, match="does not belong"):
-        build_manifest_source_result(job_id, 1, original, tampered, reference)
+    tampered_reference = reference.model_copy(update={"sha256": "f" * 64})
+    with pytest.raises(ValueError, match="sha256"):
+        build_manifest_source_result(job_id, 1, original, prepared, tampered_reference)
+
+
+@pytest.mark.asyncio
+async def test_manifest_stream_enforces_its_dedicated_byte_limit() -> None:
+    prepared = prepare_manifest(JOB_ID, 1, collected_result(), max_bytes=16)
+
+    with pytest.raises(ManifestTooLargeError, match="configured byte limit"):
+        b"".join([chunk async for chunk in prepared.iter_bytes()])
+
+
+def test_result_serialization_rejects_excessive_aggregate_scalar_content() -> None:
+    collected = collected_result()
+    collected.records[0].raw_data = {"first": "a" * 64, "second": "b" * 64}
+
+    with pytest.raises(ResultTooComplexError, match="total scalar character limit"):
+        validate_result_serialization_limits(
+            collected,
+            max_scalar_chars=2048,
+            max_total_scalar_chars=100,
+            max_json_nodes=1000,
+        )
+
+
+def test_jcs_digest_handles_number_longer_than_compact_python_json() -> None:
+    collected = collected_result()
+    collected.records[0].raw_data["large_number"] = 1e20
+    candidate = prepare_inline_source_result(JOB_ID, 1, collected)
+    terminal_payload = candidate.model_dump(mode="json")
+    compact = json.dumps(
+        terminal_payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode()
+    digest_payload = dict(terminal_payload)
+    digest_payload.pop("digest")
+    canonical = rfc8785.dumps(digest_payload)
+
+    assert b"1e+20" in compact
+    assert b"100000000000000000000" in canonical
+
+    result = finalize_inline_source_result(candidate, max_bytes=len(compact))
+    validate_source_result_semantics(result)

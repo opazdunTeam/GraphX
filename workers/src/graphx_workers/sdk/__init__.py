@@ -1,7 +1,11 @@
 """Stable interfaces available to source adapters."""
 
+from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.claims import Claim
+from graphx_workers.contracts.records import SourceRecord
 from graphx_workers.sdk.adapter import (
     AdapterContext,
+    AdapterMetadata,
     CollectRequest,
     CollectResult,
     HTTPClient,
@@ -23,8 +27,11 @@ from graphx_workers.sdk.errors import (
 
 __all__ = [
     "AdapterContext",
+    "AdapterMetadata",
     "AdapterError",
     "ActionRequiredError",
+    "ArtifactReference",
+    "Claim",
     "CollectRequest",
     "CollectResult",
     "ErrorClassification",
@@ -36,6 +43,7 @@ __all__ = [
     "RateLimiter",
     "RateLimitedError",
     "SecretProvider",
+    "SourceRecord",
     "SourceAdapter",
     "TransientAdapterError",
 ]

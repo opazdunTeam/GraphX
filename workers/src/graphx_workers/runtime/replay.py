@@ -16,10 +16,11 @@ from uuid import UUID
 
 import portalocker
 
+from graphx_workers.runtime.errors import RuntimeCapacityError
 from graphx_workers.runtime.terminal import PreparedTerminalMessage
 
 
-class ReplayStoreCapacityError(RuntimeError):
+class ReplayStoreCapacityError(RuntimeCapacityError):
     """The replay journal cannot safely reserve another command."""
 
     def __init__(

@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import aio_pika
@@ -16,7 +16,7 @@ from aio_pika.abc import (
 )
 from pydantic import AnyUrl
 
-from graphx_workers.contracts.artifacts import ArtifactReference
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
 from graphx_workers.contracts.messages import (
     CollectLimits,
     SourceCollectRequested,
@@ -44,7 +44,7 @@ from graphx_workers.runtime.replay import (
     VolatileTerminalReplayStore,
 )
 from graphx_workers.runtime.terminal import TerminalMessageFactory
-from graphx_workers.sdk import CollectRequest, CollectResult, SourceAdapter
+from graphx_workers.sdk import AdapterMetadata, CollectRequest, CollectResult, SourceAdapter
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_URL = os.environ.get("RABBITMQ_TEST_URL")
@@ -80,6 +80,12 @@ class FakeContextFactory(AdapterContextFactory):
 
 
 class FakeAdapter:
+    metadata = AdapterMetadata(
+        source="fixture",
+        version="fixture-adapter/1",
+        supported_operations=frozenset({"collect"}),
+    )
+
     def __init__(
         self,
         gate: asyncio.Event | None = None,
@@ -96,7 +102,7 @@ class FakeAdapter:
     async def collect(
         self, request: CollectRequest, context: RuntimeAdapterContext
     ) -> CollectResult:
-        del request, context
+        del request
         self.calls += 1
         self.started.set()
         try:
@@ -112,26 +118,26 @@ class FakeAdapter:
                     raise
             self.cancelled.set()
             raise
+        artifact = ArtifactReference(
+            local_ref="artifact:raw:1",
+            kind="raw_response",
+            object_key=artifact_object_key(context.job_id, context.attempt_no, "artifact:raw:1"),
+            sha256="a" * 64,
+            media_type="application/json",
+            byte_size=2,
+            source_uri=AnyUrl("https://example.test/subject/1"),
+            retrieved_at=NOW,
+            published_at=None,
+            http_metadata={},
+        )
+        cast(Any, context).saved_artifacts = (artifact.model_copy(deep=True),)
         return CollectResult(
             outcome="not_found",
             adapter_version="fixture-adapter/1",
             parser_version="fixture-parser/1",
             mapping_version="fixture-mapper/1",
             normalization_version="normalization/1",
-            artifacts=[
-                ArtifactReference(
-                    local_ref="artifact:raw:1",
-                    kind="raw_response",
-                    object_key="fixture/response.json",
-                    sha256="a" * 64,
-                    media_type="application/json",
-                    byte_size=2,
-                    source_uri=AnyUrl("https://example.test/subject/1"),
-                    retrieved_at=NOW,
-                    published_at=None,
-                    http_metadata={},
-                )
-            ],
+            artifacts=[artifact],
         )
 
 
@@ -251,8 +257,6 @@ def build_runtime(
         FakeContextFactory(),
         (
             AdapterRegistration(
-                source="fixture",
-                version="fixture-adapter/1",
                 adapter=cast(SourceAdapter, adapter),
             ),
         ),

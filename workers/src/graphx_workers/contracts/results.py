@@ -3,15 +3,28 @@
 import json
 from collections.abc import Mapping
 from hashlib import sha256
+from math import isfinite
 from typing import Any, Literal, Self
 from uuid import UUID
 
 import rfc8785
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from graphx_workers.contracts.artifacts import ArtifactReference
-from graphx_workers.contracts.claims import Claim
+from graphx_workers.contracts.artifacts import ArtifactReference, artifact_object_key
+from graphx_workers.contracts.claims import Claim, meaningful_claim_value
 from graphx_workers.contracts.records import SourceRecord
+from graphx_workers.contracts.schema import validate_raw_locator_numbers, validate_raw_record_count
+from graphx_workers.contracts.values import MAX_SAFE_INTEGER, validate_persisted_text
+
+
+def _validate_record_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("record_count must be an exact non-negative safe integer")
+    if isinstance(value, float) and (not isfinite(value) or not value.is_integer()):
+        raise ValueError("record_count must be an exact non-negative safe integer")
+    if not 0 <= value <= MAX_SAFE_INTEGER:
+        raise ValueError("record_count must be an exact non-negative safe integer")
+    return int(value)
 
 
 class SourceResult(BaseModel):
@@ -20,7 +33,7 @@ class SourceResult(BaseModel):
     job_id: UUID
     attempt_no: int = Field(ge=1)
     outcome: Literal["succeeded", "not_found"]
-    record_count: int = Field(ge=0)
+    record_count: int = Field(ge=0, le=MAX_SAFE_INTEGER)
     adapter_version: str = Field(min_length=1)
     parser_version: str = Field(min_length=1)
     mapping_version: str = Field(min_length=1)
@@ -32,8 +45,47 @@ class SourceResult(BaseModel):
     claims: list[Claim]
     warnings: list[str]
 
+    @field_validator("record_count", mode="before")
+    @classmethod
+    def validate_record_count(cls, value: Any) -> int:
+        return _validate_record_count(value)
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: Any | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validate_raw_record_count(json_data)
+        validate_raw_locator_numbers(json_data)
+        return super().model_validate_json(
+            json_data,
+            strict=strict,
+            extra=extra,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+    @field_validator(
+        "adapter_version", "parser_version", "mapping_version", "normalization_version"
+    )
+    @classmethod
+    def validate_versions(cls, value: str) -> str:
+        return validate_persisted_text(value, "result versions")
+
     @model_validator(mode="after")
     def validate_schema_rules(self) -> Self:
+        validate_artifact_refs(
+            [*self.artifacts, *([self.manifest] if self.manifest is not None else [])],
+            job_id=self.job_id,
+            attempt_no=self.attempt_no,
+        )
         if self.manifest is not None:
             if self.manifest.kind != "manifest" or self.manifest.media_type != "application/json":
                 raise ValueError("manifest must be a JSON manifest artifact")
@@ -52,24 +104,42 @@ class SourceResultManifest(BaseModel):
     schema_version: Literal[1]
     job_id: UUID
     attempt_no: int = Field(ge=1)
-    record_count: int = Field(ge=0)
+    record_count: int = Field(ge=0, le=MAX_SAFE_INTEGER)
     records: list[SourceRecord]
     claims: list[Claim]
 
+    @field_validator("record_count", mode="before")
+    @classmethod
+    def validate_record_count(cls, value: Any) -> int:
+        return _validate_record_count(value)
 
-def _meaningful(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, dict)):
-        return bool(value)
-    return True
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: Any | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validate_raw_record_count(json_data)
+        validate_raw_locator_numbers(json_data)
+        return super().model_validate_json(
+            json_data,
+            strict=strict,
+            extra=extra,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
 
 
 def validate_result_content(
     records: list[SourceRecord], claims: list[Claim], artifacts: list[ArtifactReference]
 ) -> None:
+    _validate_source_artifact_kinds(artifacts)
     known_artifacts = validate_artifact_refs(artifacts)
 
     record_refs = [record.local_ref for record in records]
@@ -77,9 +147,16 @@ def validate_result_content(
         raise ValueError("source record local_ref values must be unique")
     known_records = set(record_refs)
 
+    schema_versions_by_artifact: dict[str, str] = {}
+
     for record in records:
         if record.artifact_local_ref not in known_artifacts:
             raise ValueError("record artifact_local_ref must resolve to a source artifact")
+        existing = schema_versions_by_artifact.setdefault(
+            record.artifact_local_ref, record.schema_version
+        )
+        if existing != record.schema_version:
+            raise ValueError("records for one artifact must use one schema_version")
     for claim in claims:
         if claim.subject_local_ref not in known_records:
             raise ValueError("claim subject_local_ref must resolve to a source record")
@@ -91,16 +168,43 @@ def validate_result_content(
             claim.object_local_ref is None
         )
         if requires_value and not any(
-            _meaningful(value) for value in (claim.raw_value, claim.normalized_value)
+            meaningful_claim_value(value) for value in (claim.raw_value, claim.normalized_value)
         ):
             raise ValueError(f"{claim.claim_kind} claim requires a meaningful value")
 
 
-def validate_artifact_refs(artifacts: list[ArtifactReference]) -> set[str]:
+def validate_artifact_refs(
+    artifacts: list[ArtifactReference],
+    *,
+    job_id: UUID | None = None,
+    attempt_no: int | None = None,
+) -> set[str]:
     artifact_refs = [artifact.local_ref for artifact in artifacts]
     if len(artifact_refs) != len(set(artifact_refs)):
         raise ValueError("artifact local_ref values must be unique")
-    return set(artifact_refs)
+    known = set(artifact_refs)
+    if job_id is not None and attempt_no is not None:
+        for artifact in artifacts:
+            if artifact.object_key != artifact_object_key(job_id, attempt_no, artifact.local_ref):
+                raise ValueError("artifact object_key does not match job, attempt and local_ref")
+    parents = {
+        artifact.local_ref: artifact.parent_local_ref
+        for artifact in artifacts
+        if artifact.parent_local_ref is not None
+    }
+    for local_ref, parent_local_ref in parents.items():
+        if parent_local_ref not in known:
+            raise ValueError("artifact parent_local_ref must resolve to an artifact")
+        if parent_local_ref == local_ref:
+            raise ValueError("artifact cannot be its own parent")
+        visited = {local_ref}
+        current: str | None = parent_local_ref
+        while current is not None:
+            if current in visited:
+                raise ValueError("artifact parent references cannot contain a cycle")
+            visited.add(current)
+            current = parents.get(current)
+    return known
 
 
 def compute_source_result_digest(result: SourceResult | Mapping[str, Any]) -> str:
@@ -114,6 +218,8 @@ def validate_source_result_semantics(
 ) -> None:
     digest_payload: SourceResult | Mapping[str, Any]
     if isinstance(raw_payload, bytes):
+        validate_raw_record_count(raw_payload)
+        validate_raw_locator_numbers(raw_payload)
         decoded = json.loads(raw_payload)
         if not isinstance(decoded, dict):
             raise ValueError("source result payload must be a JSON object")
@@ -122,23 +228,54 @@ def validate_source_result_semantics(
         digest_payload = result if raw_payload is None else raw_payload
     if compute_source_result_digest(digest_payload) != result.digest:
         raise ValueError("source result digest does not match RFC 8785 canonical payload")
-    artifact_refs = validate_artifact_refs(result.artifacts)
-    if result.manifest is not None and result.manifest.local_ref in artifact_refs:
-        raise ValueError("manifest and source artifact local_ref values must be unique")
+    artifact_refs = validate_artifact_refs(
+        result.artifacts, job_id=result.job_id, attempt_no=result.attempt_no
+    )
+    _validate_source_artifact_kinds(result.artifacts)
+    if result.manifest is not None:
+        if result.manifest.local_ref in artifact_refs:
+            raise ValueError("manifest and source artifact local_ref values must be unique")
+        validate_artifact_refs(
+            [*result.artifacts, result.manifest],
+            job_id=result.job_id,
+            attempt_no=result.attempt_no,
+        )
     if result.manifest is None:
         if result.record_count != len(result.records):
             raise ValueError("inline record_count must equal the number of records")
         validate_result_content(result.records, result.claims, result.artifacts)
 
 
+def _validate_source_artifact_kinds(artifacts: list[ArtifactReference]) -> None:
+    if any(artifact.kind == "manifest" for artifact in artifacts):
+        raise ValueError("source artifacts cannot use manifest kind")
+
+
 def validate_manifest_semantics(
     result: SourceResult, manifest: SourceResultManifest, stored_bytes: bytes
 ) -> None:
+    validate_raw_record_count(stored_bytes)
+    validate_raw_locator_numbers(stored_bytes)
+    validate_manifest_reference_semantics(
+        result,
+        manifest,
+        byte_size=len(stored_bytes),
+        sha256_value=sha256(stored_bytes).hexdigest(),
+    )
+
+
+def validate_manifest_reference_semantics(
+    result: SourceResult,
+    manifest: SourceResultManifest,
+    *,
+    byte_size: int,
+    sha256_value: str,
+) -> None:
+    """Validate manifest metadata when trusted storage computed size and digest."""
     reference = result.manifest
     if reference is None:
         raise ValueError("manifest validation requires a manifest result")
-    hash_mismatch = reference.sha256 != sha256(stored_bytes).hexdigest()
-    if reference.byte_size != len(stored_bytes) or hash_mismatch:
+    if reference.byte_size != byte_size or reference.sha256 != sha256_value:
         raise ValueError("manifest hash or byte size does not match stored bytes")
     if (result.job_id, result.attempt_no, result.record_count) != (
         manifest.job_id,

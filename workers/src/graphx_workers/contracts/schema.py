@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -9,13 +10,13 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
+from graphx_workers.contracts.values import MAX_SAFE_INTEGER
+
 MESSAGE_SCHEMAS = {
     "source.collect.requested.v1": "messages/source-collect-requested.v1.schema.json",
     "source.collect.completed.v1": "messages/source-collect-completed.v1.schema.json",
     "source.collect.failed.v1": "messages/source-collect-failed.v1.schema.json",
 }
-
-MAX_SAFE_INTEGER = 2**53 - 1
 
 
 def decode_contract_json(raw: bytes | str) -> dict[str, Any]:
@@ -97,6 +98,9 @@ class ContractSchemaRegistry:
     def validate_message_json(self, raw: bytes | str) -> dict[str, Any]:
         value = decode_contract_json(raw)
         self.validate_message(value)
+        if value.get("type") == "source.collect.completed.v1":
+            validate_raw_record_count(raw, envelope=True)
+            validate_raw_locator_numbers(raw, envelope=True)
         return value
 
     def validate_manifest(self, value: Mapping[str, Any]) -> None:
@@ -105,4 +109,73 @@ class ContractSchemaRegistry:
     def validate_manifest_json(self, raw: bytes | str) -> dict[str, Any]:
         value = decode_contract_json(raw)
         self.validate_manifest(value)
+        validate_raw_record_count(raw)
+        validate_raw_locator_numbers(raw)
         return value
+
+
+def validate_raw_locator_numbers(
+    document: bytes | bytearray | str,
+    *,
+    envelope: bool = False,
+    single_claim: bool = False,
+) -> None:
+    """Reject locator decimals whose exact token is fractional or not portable."""
+
+    class NumberToken(str):
+        pass
+
+    decoded = json.loads(document, parse_int=NumberToken, parse_float=NumberToken)
+    if not isinstance(decoded, dict):
+        return
+    if envelope:
+        decoded = decoded.get("payload")
+        if not isinstance(decoded, dict):
+            return
+    claims = [decoded] if single_claim else decoded.get("claims")
+    if not isinstance(claims, list):
+        return
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        locator = claim.get("evidence_locator")
+        if not isinstance(locator, dict):
+            continue
+        for field in ("csv_row", "page_number"):
+            token = locator.get(field)
+            if not isinstance(token, NumberToken):
+                continue
+            try:
+                value = Decimal(token)
+                integral = value.to_integral_exact()
+            except (InvalidOperation, ValueError) as error:
+                raise ValueError(f"evidence {field} must be an exact safe integer") from error
+            if value != integral or not 1 <= integral <= MAX_SAFE_INTEGER:
+                raise ValueError(f"evidence {field} must be an exact safe integer")
+
+
+def validate_raw_record_count(document: bytes | bytearray | str, *, envelope: bool = False) -> None:
+    """Reject record counts that only become integers after float coercion."""
+
+    class NumberToken(str):
+        pass
+
+    decoded = json.loads(document, parse_int=NumberToken, parse_float=NumberToken)
+    if not isinstance(decoded, dict):
+        return
+    if envelope:
+        decoded = decoded.get("payload")
+        if not isinstance(decoded, dict):
+            return
+    if "record_count" not in decoded:
+        return
+    token = decoded["record_count"]
+    if not isinstance(token, NumberToken):
+        raise ValueError("record_count must be an exact non-negative safe integer")
+    try:
+        value = Decimal(token)
+        integral = value.to_integral_exact()
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError("record_count must be an exact non-negative safe integer") from error
+    if value != integral or not 0 <= integral <= MAX_SAFE_INTEGER:
+        raise ValueError("record_count must be an exact non-negative safe integer")

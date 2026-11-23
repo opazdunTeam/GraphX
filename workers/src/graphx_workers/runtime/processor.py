@@ -2,8 +2,8 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
@@ -17,17 +17,27 @@ from graphx_workers.contracts.messages import (
     SourceCollectRequested,
     parse_source_message,
 )
-from graphx_workers.contracts.results import SourceResult
+from graphx_workers.contracts.results import SourceResult, validate_source_result_semantics
 from graphx_workers.contracts.schema import ContractSchemaRegistry
+from graphx_workers.runtime.errors import RuntimeFatalError, RuntimeInfrastructureUncertainError
 from graphx_workers.runtime.replay import (
     ReplayEntryTooLargeError,
     StoredTerminalMessage,
     TerminalReplayStore,
 )
 from graphx_workers.runtime.requests import to_collect_request
-from graphx_workers.runtime.results import build_inline_source_result
+from graphx_workers.runtime.results import (
+    ResultSerializationLimitError,
+    build_inline_source_result,
+    reconcile_source_artifacts,
+)
 from graphx_workers.runtime.terminal import PreparedTerminalMessage, TerminalMessageFactory
-from graphx_workers.sdk.adapter import AdapterContext, CollectResult, SourceAdapter
+from graphx_workers.sdk.adapter import (
+    AdapterContext,
+    AdapterMetadata,
+    CollectResult,
+    SourceAdapter,
+)
 from graphx_workers.sdk.errors import AdapterError
 
 RUNTIME_VERSION = "graphx-worker-runtime/1"
@@ -40,6 +50,16 @@ class InvalidCommandError(ValueError):
 class RuntimeAdapterContext(AdapterContext, Protocol):
     @property
     def saved_artifacts(self) -> Sequence[ArtifactReference]: ...
+
+    async def save_manifest(
+        self,
+        content: AsyncIterable[bytes],
+        *,
+        local_ref: str,
+        source_uri: str,
+        retrieved_at: datetime,
+        max_bytes: int,
+    ) -> ArtifactReference: ...
 
 
 class AdapterContextFactory(Protocol):
@@ -59,6 +79,8 @@ class ResultFinalizer(Protocol):
         command: SourceCollectRequested,
         collected: CollectResult,
         context: RuntimeAdapterContext,
+        *,
+        force_manifest: bool = False,
     ) -> SourceResult: ...
 
 
@@ -68,8 +90,11 @@ class InlineResultFinalizer:
         command: SourceCollectRequested,
         collected: CollectResult,
         context: RuntimeAdapterContext,
+        *,
+        force_manifest: bool = False,
     ) -> SourceResult:
-        del context
+        del force_manifest
+        collected = reconcile_source_artifacts(collected, context.saved_artifacts)
         return build_inline_source_result(
             command.payload.job_id,
             command.payload.attempt_no,
@@ -79,9 +104,22 @@ class InlineResultFinalizer:
 
 @dataclass(frozen=True, slots=True)
 class AdapterRegistration:
-    source: str
-    version: str
     adapter: SourceAdapter
+    metadata: AdapterMetadata = field(init=False)
+
+    def __post_init__(self) -> None:
+        metadata = getattr(self.adapter, "metadata", None)
+        if not isinstance(metadata, AdapterMetadata):
+            raise TypeError("source adapter must expose AdapterMetadata")
+        object.__setattr__(self, "metadata", metadata)
+
+    @property
+    def source(self) -> str:
+        return self.metadata.source
+
+    @property
+    def version(self) -> str:
+        return self.metadata.version
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +209,7 @@ class SourceCommandProcessor:
                 self._validate_replay(command, stored.message)
                 return stored.message
 
-            outcome = await self._execute(command)
+            outcome = await self._execute(command, fingerprint)
             try:
                 stored = await self._replay_store.put_if_absent(
                     command.message_id,
@@ -201,7 +239,7 @@ class SourceCommandProcessor:
                 task.cancel()
             async with self._lock:
                 for message_id, entry in tuple(self._inflight.items()):
-                    if entry[1] in tasks:
+                    if entry[1] in tasks and entry[1].done():
                         self._inflight.pop(message_id, None)
 
     def _parse_command(self, raw: bytes) -> SourceCollectRequested:
@@ -214,7 +252,11 @@ class SourceCommandProcessor:
             raise InvalidCommandError("delivery is not a source collection command")
         return message
 
-    async def _execute(self, command: SourceCollectRequested) -> _ExecutionOutcome:
+    async def _execute(
+        self,
+        command: SourceCollectRequested,
+        fingerprint: str,
+    ) -> _ExecutionOutcome:
         registration = self._adapters.get(command.payload.source)
         if registration is None:
             return _ExecutionOutcome(
@@ -228,6 +270,21 @@ class SourceCommandProcessor:
                     ),
                 ),
                 adapter_version=RUNTIME_VERSION,
+                artifacts=(),
+            )
+
+        if command.payload.operation not in registration.metadata.supported_operations:
+            return _ExecutionOutcome(
+                message=self._terminal_factory.failed(
+                    command,
+                    adapter_version=registration.version,
+                    artifacts=(),
+                    error=AdapterError(
+                        ErrorCode.SOURCE_UNSUPPORTED_OPERATION,
+                        "source operation is not supported by the adapter",
+                    ),
+                ),
+                adapter_version=registration.version,
                 artifacts=(),
             )
 
@@ -253,10 +310,25 @@ class SourceCommandProcessor:
                     to_collect_request(command.payload),
                     context,
                 )
+                if collected.adapter_version != registration.version:
+                    raise ValueError("adapter result version does not match its metadata")
                 result = await self._result_finalizer.finalize(command, collected, context)
+                completed = self._terminal_factory.completed(command, result)
+                if (
+                    result.outcome == "succeeded"
+                    and result.manifest is None
+                    and not self._replay_store.entry_fits(fingerprint, completed)
+                ):
+                    result = await self._result_finalizer.finalize(
+                        command,
+                        collected,
+                        context,
+                        force_manifest=True,
+                    )
+                    completed = self._terminal_factory.completed(command, result)
             artifacts = self._artifacts(context)
             return _ExecutionOutcome(
-                message=self._terminal_factory.completed(command, result),
+                message=completed,
                 adapter_version=registration.version,
                 artifacts=artifacts,
             )
@@ -280,6 +352,25 @@ class SourceCommandProcessor:
                     adapter_version=registration.version,
                     artifacts=artifacts,
                     error=AdapterError(ErrorCode.SOURCE_TIMEOUT, "source collection timed out"),
+                ),
+                adapter_version=registration.version,
+                artifacts=artifacts,
+            )
+        except RuntimeInfrastructureUncertainError:
+            # A PUT may have committed even though its result is not observable yet.
+            # Publishing a terminal receipt here could orphan immutable evidence.
+            raise
+        except ResultSerializationLimitError:
+            artifacts = self._artifacts(context)
+            return _ExecutionOutcome(
+                message=self._terminal_factory.failed(
+                    command,
+                    adapter_version=registration.version,
+                    artifacts=artifacts,
+                    error=AdapterError(
+                        ErrorCode.CONTRACT_VALIDATION_FAILED,
+                        "source result exceeds configured serialization limits",
+                    ),
                 ),
                 adapter_version=registration.version,
                 artifacts=artifacts,
@@ -350,17 +441,25 @@ class SourceCommandProcessor:
         command: SourceCollectRequested,
         prepared: PreparedTerminalMessage,
     ) -> None:
-        document = self._schema_registry.validate_message_json(prepared.body)
-        message = parse_source_message(document)
-        if not isinstance(message, SourceCollectCompleted | SourceCollectFailed):
-            raise ValueError("terminal replay entry does not contain a terminal result")
-        if (
-            message.message_id != prepared.message_id
-            or message.type != prepared.message_type
-            or message.correlation_id != prepared.correlation_id
-            or message.correlation_id != command.correlation_id
-            or message.causation_id != command.message_id
-            or message.payload.job_id != command.payload.job_id
-            or message.payload.attempt_no != command.payload.attempt_no
-        ):
-            raise ValueError("terminal replay entry does not match its source command")
+        try:
+            document = self._schema_registry.validate_message_json(prepared.body)
+            message = parse_source_message(document)
+            if not isinstance(message, SourceCollectCompleted | SourceCollectFailed):
+                raise ValueError("terminal replay entry does not contain a terminal result")
+            if isinstance(message, SourceCollectCompleted):
+                payload = document.get("payload")
+                if not isinstance(payload, Mapping):
+                    raise ValueError("terminal replay payload must be an object")
+                validate_source_result_semantics(message.payload, payload)
+            if (
+                message.message_id != prepared.message_id
+                or message.type != prepared.message_type
+                or message.correlation_id != prepared.correlation_id
+                or message.correlation_id != command.correlation_id
+                or message.causation_id != command.message_id
+                or message.payload.job_id != command.payload.job_id
+                or message.payload.attempt_no != command.payload.attempt_no
+            ):
+                raise ValueError("terminal replay entry does not match its source command")
+        except Exception as error:
+            raise RuntimeFatalError("stored terminal replay is invalid") from error
