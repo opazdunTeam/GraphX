@@ -125,11 +125,33 @@ func (s *OutboxStore) MarkPublished(
 		return fmt.Errorf("mark outbox message published: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox message %s lease was lost before completion", message.ID)
+		return fmt.Errorf("%w before completing message %s", outbox.ErrLeaseLost, message.ID)
 	}
 
 	if message.AggregateType == "source_job" {
-		if _, err := tx.Exec(ctx, `
+		var jobStatus, investigationID string
+		var currentAttempt int
+		err := tx.QueryRow(ctx, `
+			select status, attempt_no, investigation_id::text
+			from source_jobs
+			where id = $1
+			for update
+		`, message.AggregateID).Scan(&jobStatus, &currentAttempt, &investigationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lock source job after publish confirm: %w", err)
+		}
+		if err == nil && jobStatus == "pending" && currentAttempt == attemptNo {
+			var investigationStatus string
+			if err := tx.QueryRow(ctx, `
+				select status
+				from investigations
+				where id = $1
+				for update
+			`, investigationID).Scan(&investigationStatus); err != nil {
+				return fmt.Errorf("lock source job investigation after publish confirm: %w", err)
+			}
+			if investigationStatus == "running" {
+				if _, err := tx.Exec(ctx, `
 			update source_jobs as job
 			set status = 'queued',
 				queued_at = coalesce(job.queued_at, now()),
@@ -137,14 +159,10 @@ func (s *OutboxStore) MarkPublished(
 			where job.id = $1
 			  and job.status = 'pending'
 			  and job.attempt_no = $2
-			  and exists (
-				  select 1
-				  from investigations as investigation
-				  where investigation.id = job.investigation_id
-				    and investigation.status = 'running'
-			  )
-		`, message.AggregateID, attemptNo); err != nil {
-			return fmt.Errorf("mark source job queued after publish confirm: %w", err)
+			`, message.AggregateID, attemptNo); err != nil {
+					return fmt.Errorf("mark source job queued after publish confirm: %w", err)
+				}
+			}
 		}
 	}
 
@@ -165,7 +183,7 @@ func (s *OutboxStore) Reschedule(ctx context.Context, message outbox.Message, de
 
 	tag, err := s.pool.Exec(ctx, `
 		update outbox_messages
-		set publish_attempts = least(publish_attempts + 1, 2147483647),
+		set publish_attempts = least(publish_attempts::bigint + 1, 2147483647)::integer,
 			available_at = now() + ($3::bigint * interval '1 millisecond'),
 			last_error = 'publisher_failed',
 			lease_token = null,
@@ -179,7 +197,7 @@ func (s *OutboxStore) Reschedule(ctx context.Context, message outbox.Message, de
 		return fmt.Errorf("reschedule outbox message: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox message %s lease was lost before rescheduling", message.ID)
+		return fmt.Errorf("%w before rescheduling message %s", outbox.ErrLeaseLost, message.ID)
 	}
 	return nil
 }

@@ -2,10 +2,18 @@ package outbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+)
+
+const (
+	testMessageID       = "30000000-0000-4000-8000-000000000001"
+	testJobID           = "20000000-0000-4000-8000-000000000001"
+	testInvestigationID = "10000000-0000-4000-8000-000000000001"
+	testCorrelationID   = "40000000-0000-4000-8000-000000000001"
 )
 
 type testStore struct {
@@ -19,9 +27,9 @@ type testStore struct {
 
 func TestPublishOneWaitsForBrokerConfirmationBeforeCompletion(t *testing.T) {
 	store := &testStore{message: &Message{
-		ID: "outbox-id", Type: "source.collect.requested.v1",
-		AggregateType: "source_job", AggregateID: "job-id",
-		Payload: []byte(`{"message_id":"outbox-id","type":"source.collect.requested.v1","payload":{"job_id":"job-id","attempt_no":1}}`),
+		ID: testMessageID, Type: "source.collect.requested.v1",
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
 	}}
 	broker := &blockingTestBroker{
 		started: make(chan struct{}),
@@ -89,18 +97,20 @@ func (s *testStore) Reschedule(_ context.Context, _ Message, delay time.Duration
 type testBroker struct {
 	publishErr error
 	published  bool
+	message    Message
 }
 
-func (b *testBroker) Publish(context.Context, Message) error {
+func (b *testBroker) Publish(_ context.Context, message Message) error {
 	b.published = true
+	b.message = message
 	return b.publishErr
 }
 
 func TestPublishOneMarksPublishedOnlyAfterBrokerConfirm(t *testing.T) {
 	store := &testStore{message: &Message{
-		ID: "outbox-id", Type: "source.collect.requested.v1",
-		AggregateType: "source_job", AggregateID: "job-id",
-		Payload: []byte(`{"message_id":"outbox-id","type":"source.collect.requested.v1","payload":{"job_id":"job-id","attempt_no":3}}`),
+		ID: testMessageID, Type: "source.collect.requested.v1",
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","attempt_no":3}}`),
 	}}
 	broker := &testBroker{}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -108,12 +118,12 @@ func TestPublishOneMarksPublishedOnlyAfterBrokerConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	processed, err := publisher.PublishOne(context.Background())
+	result, err := publisher.PublishOne(context.Background())
 	if err != nil {
 		t.Fatalf("PublishOne() error = %v", err)
 	}
-	if !processed || !broker.published || !store.published {
-		t.Fatalf("processed/broker/published = %t/%t/%t, want all true", processed, broker.published, store.published)
+	if !result.Processed || !result.Published || !broker.published || !store.published {
+		t.Fatalf("result/broker/store = %#v/%t/%t, want published", result, broker.published, store.published)
 	}
 	if store.attemptNo != 3 {
 		t.Fatalf("marked attempt = %d, want 3", store.attemptNo)
@@ -125,10 +135,10 @@ func TestPublishOneMarksPublishedOnlyAfterBrokerConfirm(t *testing.T) {
 
 func TestPublishOneDefersFailedDeliveryWithoutMarkingPublished(t *testing.T) {
 	store := &testStore{message: &Message{
-		ID: "outbox-id", Type: "source.collect.requested.v1",
-		AggregateType: "source_job", AggregateID: "job-id",
+		ID: testMessageID, Type: "source.collect.requested.v1",
+		AggregateType: "source_job", AggregateID: testJobID,
 		PublishAttempts: 2,
-		Payload:         []byte(`{"message_id":"outbox-id","type":"source.collect.requested.v1","payload":{"job_id":"job-id","attempt_no":1}}`),
+		Payload:         []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
 	}}
 	broker := &testBroker{publishErr: errors.New("confirm was not received")}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -136,9 +146,9 @@ func TestPublishOneDefersFailedDeliveryWithoutMarkingPublished(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	processed, err := publisher.PublishOne(context.Background())
-	if !processed || !IsDeferred(err) {
-		t.Fatalf("PublishOne() = %t, %v; want processed and deferred error", processed, err)
+	result, err := publisher.PublishOne(context.Background())
+	if !result.Processed || !IsDeferred(err) {
+		t.Fatalf("PublishOne() = %#v, %v; want processed and deferred error", result, err)
 	}
 	if store.published || !store.rescheduled {
 		t.Fatalf("published/rescheduled = %t/%t, want false/true", store.published, store.rescheduled)
@@ -150,9 +160,9 @@ func TestPublishOneDefersFailedDeliveryWithoutMarkingPublished(t *testing.T) {
 
 func TestPublishOneRejectsMismatchedSourceJobPayload(t *testing.T) {
 	store := &testStore{message: &Message{
-		ID: "outbox-id", Type: "source.collect.requested.v1",
-		AggregateType: "source_job", AggregateID: "job-id",
-		Payload: []byte(`{"message_id":"different-id","type":"source.collect.requested.v1","payload":{"job_id":"job-id","attempt_no":1}}`),
+		ID: testMessageID, Type: "source.collect.requested.v1",
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"30000000-0000-4000-8000-000000000002","type":"source.collect.requested.v1","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
 	}}
 	broker := &testBroker{}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -160,12 +170,102 @@ func TestPublishOneRejectsMismatchedSourceJobPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	processed, err := publisher.PublishOne(context.Background())
-	if !processed || !IsDeferred(err) {
-		t.Fatalf("PublishOne() = %t, %v; want message deferred", processed, err)
+	result, err := publisher.PublishOne(context.Background())
+	if !result.Processed || !IsDeferred(err) {
+		t.Fatalf("PublishOne() = %#v, %v; want message deferred", result, err)
 	}
 	if broker.published || store.published || !store.rescheduled {
 		t.Fatalf("broker/published/rescheduled = %t/%t/%t", broker.published, store.published, store.rescheduled)
+	}
+}
+
+func TestPublishOneAcceptsEquivalentUUIDAndIntegralNumberRepresentations(t *testing.T) {
+	upperMessageID := "30000000-0000-4000-8000-00000000ABCD"
+	upperJobID := "20000000-0000-4000-8000-00000000ABCD"
+	store := &testStore{message: &Message{
+		ID: strings.ToLower(upperMessageID), Type: sourceCollectRequestedType,
+		AggregateType: "source_job", AggregateID: strings.ToLower(upperJobID),
+		Payload: []byte(`{"message_id":"` + upperMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testCorrelationID + `","payload":{"job_id":"` + upperJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1e0}}`),
+	}}
+	broker := &testBroker{}
+	publisher, err := NewPublisher(store, broker, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := publisher.PublishOne(context.Background())
+	if err != nil || !result.Published || !broker.published || !store.published {
+		t.Fatalf("PublishOne() = %#v, %v; want published", result, err)
+	}
+	if broker.message.ID != upperMessageID || broker.message.AggregateID != upperJobID || store.attemptNo != 1 {
+		t.Fatalf("wire identity = %q/%q attempt %d", broker.message.ID, broker.message.AggregateID, store.attemptNo)
+	}
+	if result.InvestigationID != testInvestigationID || result.CorrelationID != testCorrelationID {
+		t.Fatalf("result identity = investigation %q correlation %q", result.InvestigationID, result.CorrelationID)
+	}
+}
+
+func TestPublishOneRejectsAttemptOutsideInteroperableJSONIntegerRange(t *testing.T) {
+	store := &testStore{message: &Message{
+		ID: testMessageID, Type: sourceCollectRequestedType,
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","payload":{"job_id":"` + testJobID + `","attempt_no":9007199254740993.0}}`),
+	}}
+	broker := &testBroker{}
+	publisher, err := NewPublisher(store, broker, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := publisher.PublishOne(context.Background())
+	if !result.Processed || !IsDeferred(err) || broker.published || store.published || !store.rescheduled {
+		t.Fatalf("PublishOne() = %#v, %v broker=%t store=%t/%t", result, err, broker.published, store.published, store.rescheduled)
+	}
+}
+
+func TestExactPositiveJSONIntegerInteroperabilityBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{name: "maximum decimal", value: "9007199254740991.0", want: int(maximumSafeJSONInteger)},
+		{name: "maximum exponent", value: "9.007199254740991e15", want: int(maximumSafeJSONInteger)},
+		{name: "adjacent overflow decimal", value: "9007199254740992.0", wantErr: true},
+		{name: "adjacent overflow exponent", value: "9.007199254740992e15", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := exactPositiveJSONInteger(json.Number(test.value))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("exactPositiveJSONInteger(%s) = %d, want error", test.value, got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("exactPositiveJSONInteger(%s) = %d, %v; want %d", test.value, got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestPublishOneRejectsSourceRequestWithWrongAggregate(t *testing.T) {
+	store := &testStore{message: &Message{
+		ID: testMessageID, Type: sourceCollectRequestedType,
+		AggregateType: "investigation", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
+	}}
+	broker := &testBroker{}
+	publisher, err := NewPublisher(store, broker, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := publisher.PublishOne(context.Background())
+	if !result.Processed || !IsDeferred(err) || broker.published || store.published || !store.rescheduled {
+		t.Fatalf("PublishOne() = %#v, %v broker=%t store=%t/%t", result, err, broker.published, store.published, store.rescheduled)
 	}
 }
 

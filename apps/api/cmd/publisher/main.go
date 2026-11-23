@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,12 @@ import (
 )
 
 const publisherPollInterval = time.Second
+
+type publisherMetrics struct {
+	published uint64
+	deferred  uint64
+	failed    uint64
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -50,7 +57,7 @@ func run() error {
 	}
 	defer func() {
 		if err := broker.Close(); err != nil {
-			logger.Error("close RabbitMQ publisher", "error", err)
+			logger.Error("close RabbitMQ publisher", publisherCloseLogFields()...)
 		}
 	}()
 
@@ -79,21 +86,45 @@ func run() error {
 	logger.Info("outbox publisher started")
 	ticker := time.NewTicker(publisherPollInterval)
 	defer ticker.Stop()
+	var metrics publisherMetrics
 
 	for {
 		if err := ctx.Err(); err != nil {
 			logger.Info("outbox publisher stopping")
 			return nil
 		}
-		processed, err := publisher.PublishOne(ctx)
+		result, err := publisher.PublishOne(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				logger.Info("outbox publisher stopping")
+				return nil
+			}
 			if outbox.IsDeferred(err) {
-				logger.Warn("outbox message deferred", "error", err)
+				metrics.deferred++
+				logger.Warn("outbox message deferred", publisherLogFields(
+					result,
+					deferredReason(err),
+					metrics,
+				)...)
 				continue
 			}
-			return fmt.Errorf("publish outbox message: %w", err)
+			metrics.failed++
+			logger.Error("outbox publisher processing failed", publisherLogFields(
+				result,
+				"internal_failure",
+				metrics,
+			)...)
+			return errors.New("outbox publisher processing failed")
 		}
-		if processed {
+		if result.Published {
+			metrics.published++
+			logger.Info("outbox message published", publisherLogFields(
+				result,
+				"published",
+				metrics,
+			)...)
+		}
+		if result.Processed {
 			continue
 		}
 
@@ -102,4 +133,33 @@ func run() error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func deferredReason(err error) string {
+	if errors.Is(err, outbox.ErrLeaseLost) {
+		return "lease_lost"
+	}
+	return "delivery_failed"
+}
+
+func publisherLogFields(
+	result outbox.PublishResult,
+	outcome string,
+	metrics publisherMetrics,
+) []any {
+	return []any{
+		"outcome", outcome,
+		"message_id", result.MessageID,
+		"job_id", result.JobID,
+		"investigation_id", result.InvestigationID,
+		"correlation_id", result.CorrelationID,
+		"retry_after", result.RetryAfter,
+		"outbox_published_total", metrics.published,
+		"outbox_deferred_total", metrics.deferred,
+		"outbox_failed_total", metrics.failed,
+	}
+}
+
+func publisherCloseLogFields() []any {
+	return []any{"outcome", "close_failed"}
 }
