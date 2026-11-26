@@ -13,7 +13,8 @@ import (
 
 func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, message orchestration.OutboxMessage) error {
 	if strings.TrimSpace(job.ID) == "" || strings.TrimSpace(job.InvestigationID) == "" ||
-		strings.TrimSpace(job.SourceID) == "" || strings.TrimSpace(job.RequestHash) == "" ||
+		strings.TrimSpace(job.SourceID) == "" || strings.TrimSpace(job.Operation) == "" ||
+		strings.TrimSpace(job.RequestHash) == "" ||
 		strings.TrimSpace(job.IdempotencyKey) == "" {
 		return errors.New("source job identity fields are required")
 	}
@@ -25,6 +26,10 @@ func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, message
 	}
 	if err := validateOutboxMessage(message, job.ID, 1); err != nil {
 		return fmt.Errorf("validate source job outbox message: %w", err)
+	}
+	if message.Operation() != job.Operation {
+		return fmt.Errorf("source job operation %q does not match outbox operation %q",
+			job.Operation, message.Operation())
 	}
 
 	return s.WithinTransaction(ctx, func(txStore *Store) error {
@@ -101,14 +106,19 @@ func (s *Store) StartNewAttempt(
 
 	return s.WithinTransaction(ctx, func(txStore *Store) error {
 		var status orchestration.Status
+		var operation string
 		var oldAttempt, maxAttempts int
 		if err := txStore.db.QueryRow(ctx, `
-			select status, attempt_no, max_attempts
+			select status, operation, attempt_no, max_attempts
 			from source_jobs
 			where id = $1
 			for update
-		`, jobID).Scan(&status, &oldAttempt, &maxAttempts); err != nil {
+		`, jobID).Scan(&status, &operation, &oldAttempt, &maxAttempts); err != nil {
 			return fmt.Errorf("lock source job: %w", err)
+		}
+		if message.Operation() != operation {
+			return fmt.Errorf("retry outbox operation %q does not match source job operation %q",
+				message.Operation(), operation)
 		}
 		if oldAttempt >= maxAttempts {
 			return fmt.Errorf("source job %s has exhausted attempts", jobID)
@@ -353,6 +363,9 @@ func validateOutboxMessage(
 	}
 	if strings.TrimSpace(message.MessageType()) == "" {
 		return errors.New("outbox message type is required")
+	}
+	if strings.TrimSpace(message.Operation()) == "" {
+		return errors.New("outbox operation is required")
 	}
 	if strings.TrimSpace(message.JSONPayload()) == "" {
 		return errors.New("outbox message payload is required")

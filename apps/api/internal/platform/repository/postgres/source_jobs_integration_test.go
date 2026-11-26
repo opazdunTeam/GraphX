@@ -28,7 +28,7 @@ func TestStoreMarkQueuedDoesNotLowerTerminalState(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-queued-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-queued-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestStoreRetryAndNewAttemptIncrement(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-retry-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-retry-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestStoreRetryRejectsMismatchedExpectedAttemptAtomically(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-mismatched-retry-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-mismatched-retry-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -173,6 +173,11 @@ func TestStoreRetryRejectsMismatchedExpectedAttemptAtomically(t *testing.T) {
 		{name: "different message attempt", expectedAttempt: 2, message: func() testOutboxMessage {
 			message := valid
 			message.attemptNo = 1
+			return message
+		}()},
+		{name: "different operation", expectedAttempt: 2, message: func() testOutboxMessage {
+			message := valid
+			message.operation = "collect"
 			return message
 		}()},
 	}
@@ -219,7 +224,7 @@ func TestStoreActionRequiredCanFail(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-action-required-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-action-required-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -281,7 +286,7 @@ func TestStoreActionRequiredStartsNewAttemptAndKeepsJobHistory(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-action-required-retry-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-action-required-retry-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -340,7 +345,7 @@ func TestStoreRetryExhaustionDoesNotChangeJob(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			max_attempts, request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', 1, $4, 'store-exhausted-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', 1, $4, 'store-exhausted-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -379,7 +384,7 @@ func TestStoreNewAttemptRollsBackWhenOutboxInsertFails(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-outbox-rollback-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-outbox-rollback-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -429,7 +434,7 @@ func TestStoreConcurrentNewAttemptCreatesOneCommand(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-concurrent-retry-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-concurrent-retry-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -497,7 +502,7 @@ func TestPreparedSourceCollectRequestStartsNewAttempt(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'prepared-retry-command-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'prepared-retry-command-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -530,7 +535,7 @@ func TestPreparedSourceCollectRequestStartsNewAttempt(t *testing.T) {
 			AttemptNo:       2,
 			InvestigationID: investigationID,
 			Source:          "fixture",
-			Operation:       "collect",
+			Operation:       "search_subject",
 			Purpose:         "subject_discovery",
 			Query: rabbitmq.SourceQuery{
 				Type: "person",
@@ -597,7 +602,7 @@ func TestStoreApplyResultStoresLateReceipt(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-late-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-late-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -654,7 +659,7 @@ func TestStoreApplyResultDeduplicatesAndRejectsDigestConflict(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-result-dedup-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-result-dedup-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}
@@ -726,7 +731,7 @@ func TestStoreApplyResultRejectsFutureAttemptAtomically(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'store-future-result-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'store-future-result-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed source job: %v", err)
 	}

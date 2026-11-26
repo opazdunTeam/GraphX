@@ -23,6 +23,19 @@ var apiEnvKeys = []string{
 	"POSTGRES_CONNECT_TIMEOUT",
 	"POSTGRES_HEALTH_TIMEOUT",
 	"RABBITMQ_URL",
+	"RABBITMQ_PREFETCH_SOURCE",
+	"RABBITMQ_CONNECT_TIMEOUT",
+	"PUBLISHER_METRICS_ADDR",
+	"S3_ENDPOINT",
+	"S3_REGION",
+	"S3_BUCKET_ARTIFACTS",
+	"S3_ACCESS_KEY",
+	"S3_SECRET_KEY",
+	"S3_USE_PATH_STYLE",
+	"S3_CONNECT_TIMEOUT",
+	"S3_READ_TIMEOUT",
+	"SOURCE_RESULT_TERMINAL_MAX_BYTES",
+	"SOURCE_RESULT_MANIFEST_MAX_BYTES",
 	"INVESTIGATION_DEFAULT_DEPTH",
 	"INVESTIGATION_MAX_DEPTH",
 	"INVESTIGATION_DEFAULT_ENTITY_LIMIT",
@@ -171,6 +184,90 @@ func TestLoadPublisherRequiresValidRabbitMQURL(t *testing.T) {
 	}
 	if cfg.RabbitMQ.URL != "amqps://publisher:secret@rabbitmq.example:5671/graphx" {
 		t.Fatal("LoadPublisher() did not preserve the configured RabbitMQ URL")
+	}
+	if cfg.PublisherMetricsAddr != defaultPublisherMetricsAddr {
+		t.Fatalf("PublisherMetricsAddr = %q, want %q", cfg.PublisherMetricsAddr, defaultPublisherMetricsAddr)
+	}
+
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@rabbitmq:5672/graphx")
+	t.Setenv("PUBLISHER_METRICS_ADDR", "0.0.0.0:9092")
+	cfg, err = LoadPublisher()
+	if err != nil {
+		t.Fatalf("LoadPublisher() with metrics address override error = %v", err)
+	}
+	if cfg.PublisherMetricsAddr != "0.0.0.0:9092" {
+		t.Fatalf("PublisherMetricsAddr = %q, want 0.0.0.0:9092", cfg.PublisherMetricsAddr)
+	}
+}
+
+func TestLoadPublisherRejectsInvalidMetricsAddress(t *testing.T) {
+	tests := []string{"", "9091", "localhost", "127.0.0.1:service", "127.0.0.1:65536"}
+	for _, address := range tests {
+		t.Run(address, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@rabbitmq:5672/graphx")
+			t.Setenv("PUBLISHER_METRICS_ADDR", address)
+			if _, err := LoadPublisher(); err == nil {
+				t.Fatal("LoadPublisher() error = nil, want metrics address validation error")
+			}
+		})
+	}
+}
+
+func TestLoadConsumer(t *testing.T) {
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@localhost:5672/graphx")
+	t.Setenv("S3_ENDPOINT", "http://localhost:9000")
+	t.Setenv("S3_BUCKET_ARTIFACTS", "graphx-artifacts")
+	t.Setenv("S3_ACCESS_KEY", "access")
+	t.Setenv("S3_SECRET_KEY", "secret")
+
+	cfg, err := LoadConsumer()
+	if err != nil {
+		t.Fatalf("LoadConsumer() error = %v", err)
+	}
+	if cfg.Consumer.Prefetch != defaultRabbitMQPrefetch ||
+		cfg.Consumer.ConnectTimeout != defaultRabbitMQConnectTimeout ||
+		cfg.Consumer.MaxMessageBytes != defaultResultMessageMaxBytes {
+		t.Fatalf("consumer settings = %#v", cfg.Consumer)
+	}
+	if cfg.ObjectStore.Region != "local" ||
+		cfg.ObjectStore.MaxManifestBytes != defaultResultManifestMaxBytes ||
+		!cfg.ObjectStore.PathStyle {
+		t.Fatalf("object store settings = %#v", cfg.ObjectStore)
+	}
+}
+
+func TestLoadConsumerRejectsInvalidObjectStoreConfiguration(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "endpoint scheme", key: "S3_ENDPOINT", value: "ftp://localhost:9000"},
+		{name: "endpoint credentials", key: "S3_ENDPOINT", value: "http://user:pass@localhost:9000"},
+		{name: "manifest size", key: "SOURCE_RESULT_MANIFEST_MAX_BYTES", value: "0"},
+		{name: "prefetch", key: "RABBITMQ_PREFETCH_SOURCE", value: "65536"},
+		{name: "path style", key: "S3_USE_PATH_STYLE", value: "sometimes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@localhost:5672/graphx")
+			t.Setenv("S3_ENDPOINT", "http://localhost:9000")
+			t.Setenv("S3_BUCKET_ARTIFACTS", "graphx-artifacts")
+			t.Setenv("S3_ACCESS_KEY", "access")
+			t.Setenv("S3_SECRET_KEY", "secret")
+			t.Setenv(test.key, test.value)
+			if _, err := LoadConsumer(); err == nil {
+				t.Fatal("LoadConsumer() error = nil, want configuration error")
+			}
+		})
 	}
 }
 

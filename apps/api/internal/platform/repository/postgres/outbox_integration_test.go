@@ -28,7 +28,7 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 		ID:              jobID,
 		InvestigationID: investigationID,
 		SourceID:        testSourceID,
-		Operation:       "collect",
+		Operation:       "search_subject",
 		Purpose:         "subject_discovery",
 		RequestHash:     strings.Repeat("a", 64),
 		IdempotencyKey:  "atomic-source-job-create",
@@ -47,6 +47,18 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 	}
 	if jobs != 1 || messages != 1 {
 		t.Fatalf("created rows = job %d outbox %d, want one each", jobs, messages)
+	}
+	mismatchedOperationJob := job
+	mismatchedOperationJob.ID = "20000000-0000-4000-8000-000000000079"
+	mismatchedOperationJob.Operation = "collect"
+	mismatchedOperationJob.IdempotencyKey = "atomic-source-job-operation-mismatch"
+	if err := store.Create(ctx, mismatchedOperationJob, sourceCollectRequestedOutboxMessage(
+		"30000000-0000-4000-8000-000000000080",
+		mismatchedOperationJob.ID,
+		investigationID,
+		1,
+	)); err == nil {
+		t.Fatal("Create() accepted a source job operation that differs from its outbox command")
 	}
 
 	rollbackInvestigationID := "10000000-0000-4000-8000-000000000078"
@@ -234,7 +246,7 @@ func TestOutboxConfirmQueuesOnlyMatchingPendingAttempt(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'outbox-confirm-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'outbox-confirm-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("insert source job: %v", err)
 	}
@@ -284,7 +296,7 @@ func TestOutboxRetryDoesNotChangeSourceJobBusinessState(t *testing.T) {
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'outbox-retry-job')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'outbox-retry-job')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("insert source job: %v", err)
 	}
@@ -378,7 +390,7 @@ func TestOutboxConfirmDoesNotChangeTerminalOrNewerAttempt(t *testing.T) {
 				insert into source_jobs (
 					id, investigation_id, source_id, operation, purpose,
 					request_hash, idempotency_key
-				) values ($1, $2, $3, 'collect', 'subject_discovery', $4, $5)
+				) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, $5)
 			`, test.jobID, test.investigation, testSourceID, strings.Repeat("a", 64), test.idempotencyKey); err != nil {
 				t.Fatalf("insert source job: %v", err)
 			}
@@ -467,7 +479,7 @@ func TestOutboxConfirmCommitsWhileInvestigationCancellationIsConcurrent(t *testi
 		insert into source_jobs (
 			id, investigation_id, source_id, operation, purpose,
 			request_hash, idempotency_key
-		) values ($1, $2, $3, 'collect', 'subject_discovery', $4, 'outbox-cancel-race')
+		) values ($1, $2, $3, 'search_subject', 'subject_discovery', $4, 'outbox-cancel-race')
 	`, jobID, investigationID, testSourceID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("insert source job: %v", err)
 	}

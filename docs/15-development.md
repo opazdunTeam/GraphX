@@ -81,6 +81,13 @@ go run ./cmd/publisher
 ```
 
 ```bash
+# Проверка RabbitMQ mandatory routing, persistent delivery и publisher confirm
+cd apps/api
+export RABBITMQ_URL='amqp://graphx:change-me@localhost:5672/graphx'
+go test ./internal/platform/rabbitmq -run '^TestConfirmPublisherWithRabbitMQ$' -count=1
+```
+
+```bash
 cd workers
 uv sync
 uv run graphx-source-worker --check

@@ -17,7 +17,7 @@ func TestPublisherLogFieldsContainOnlyStructuredOperationalContext(t *testing.T)
 		CorrelationID:   "correlation-id",
 		RetryAfter:      time.Second,
 	}
-	fields := publisherLogFields(result, "delivery_failed", publisherMetrics{
+	fields := publisherLogFields(result, "delivery_failed", &publisherMetrics{
 		published: 2,
 		deferred:  3,
 		failed:    4,

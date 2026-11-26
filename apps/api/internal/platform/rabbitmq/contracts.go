@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	SourceCollectRequestedType = "source.collect.requested.v1"
-	SourceCollectCompletedType = "source.collect.completed.v1"
-	SourceCollectFailedType    = "source.collect.failed.v1"
+	SourceCollectRequestedType   = "source.collect.requested.v1"
+	SourceCollectCompletedType   = "source.collect.completed.v1"
+	SourceCollectFailedType      = "source.collect.failed.v1"
+	SourceSearchSubjectOperation = "search_subject"
 )
 
 type Envelope[T any] struct {
@@ -49,20 +50,9 @@ type SourceCollectRequestedPayload struct {
 	Deadline        time.Time     `json:"deadline"`
 }
 
-type SourceCollectError struct {
-	Code              string `json:"code"`
-	Classification    string `json:"classification"`
-	Message           string `json:"message"`
-	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
-}
+type SourceCollectError = ingestion.SourceCollectError
 
-type SourceCollectFailedPayload struct {
-	JobID          string                        `json:"job_id"`
-	AttemptNo      int                           `json:"attempt_no"`
-	AdapterVersion string                        `json:"adapter_version"`
-	Artifacts      []ingestion.ArtifactReference `json:"artifacts"`
-	Error          SourceCollectError            `json:"error"`
-}
+type SourceCollectFailedPayload = ingestion.SourceCollectFailedPayload
 
 type ValidatedMessage struct {
 	Type          string

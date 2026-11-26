@@ -50,6 +50,7 @@ type OutboxMessage interface {
 	OutboxID() string
 	MessageType() string
 	AggregateID() string
+	Operation() string
 	AttemptNo() int
 	JSONPayload() string
 }

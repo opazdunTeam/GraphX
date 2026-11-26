@@ -220,11 +220,10 @@ func sourceJobIdentity(message Message) (sourceJobMessageIdentity, error) {
 		!sameUUID(jobID, message.AggregateID) {
 		return sourceJobMessageIdentity{}, errors.New("source job outbox payload identity does not match its row")
 	}
-	if _, err := uuid.Parse(correlationID); err != nil {
-		correlationID = ""
-	}
-	if _, err := uuid.Parse(investigationID); err != nil {
-		investigationID = ""
+	if !sameUUID(correlationID, investigationID) {
+		return sourceJobMessageIdentity{}, errors.New(
+			"source job outbox correlation id does not match investigation id",
+		)
 	}
 	return sourceJobMessageIdentity{
 		MessageID:       messageID,

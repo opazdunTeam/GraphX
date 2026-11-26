@@ -90,18 +90,29 @@ func TestInvestigationCreationStoreIsIdempotentAndTransactional(t *testing.T) {
 	}
 
 	var jobs, outboxes, idem int
+	var storedOperation, payloadOperation string
 	if err := pool.QueryRow(ctx, `
 		select
 			(select count(*) from source_jobs where investigation_id = $1),
 			(select count(*) from outbox_messages where aggregate_id in
 				(select id from source_jobs where investigation_id = $1)),
 			(select count(*) from api_idempotency_keys
-				where scope = 'investigation' and idempotency_key = $2)
-	`, accepted.ID, command.IdempotencyKey).Scan(&jobs, &outboxes, &idem); err != nil {
+				where scope = 'investigation' and idempotency_key = $2),
+			(select operation from source_jobs where investigation_id = $1),
+			(select payload->'payload'->>'operation' from outbox_messages
+				where aggregate_id in
+					(select id from source_jobs where investigation_id = $1))
+	`, accepted.ID, command.IdempotencyKey).Scan(
+		&jobs, &outboxes, &idem, &storedOperation, &payloadOperation,
+	); err != nil {
 		t.Fatalf("count creation records: %v", err)
 	}
 	if jobs != 1 || outboxes != 1 || idem != 1 {
 		t.Fatalf("creation records = jobs %d outboxes %d idem %d, want 1/1/1", jobs, outboxes, idem)
+	}
+	if storedOperation != "search_subject" || payloadOperation != storedOperation {
+		t.Fatalf("stored source operation = %q and payload operation = %q, want both search_subject",
+			storedOperation, payloadOperation)
 	}
 
 	replayed, err := store.Create(ctx, command, sources)

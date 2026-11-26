@@ -39,8 +39,8 @@ apps/api/
 ### Точки запуска
 
 - `cmd/api` собирает зависимости и запускает HTTP-сервер;
-- `cmd/consumer` сейчас запускает lifecycle scaffold; после подключения messaging runtime эта точка входа будет принимать результаты workers из RabbitMQ.
-- `cmd/publisher` читает только `outbox_messages`, публикует постоянные сообщения и фиксирует отправку после RabbitMQ confirm.
+- `cmd/consumer` принимает completed/failed результаты workers из RabbitMQ, проверяет контракты и сохраняет их вместе с бизнес-эффектами в PostgreSQL одной транзакцией. Для запуска нужны настройки PostgreSQL, RabbitMQ и S3/MinIO.
+- `cmd/publisher` выбирает сообщения только из `outbox_messages`, публикует постоянные сообщения и фиксирует отправку после RabbitMQ confirm. После подтверждения он читает состояние связанного задания и расследования, чтобы выполнить условный переход задания в `queued`; `source_jobs` не используется как очередь публикации.
 
 ### Предметные модули
 
@@ -132,7 +132,7 @@ OpenAPI определяет HTTP transport и используется для �
 
 API использует только переменные окружения. Общий каталог переменных проекта и безопасные примеры находятся в корневом [`.env.example`](../../.env.example). Процесс API читает `APP_ENV`, `LOG_LEVEL`, `LOG_FORMAT`, `API_HTTP_ADDR`, `API_*_TIMEOUT`, `POSTGRES_*` и `INVESTIGATION_DEFAULT_*`/`INVESTIGATION_MAX_*`. `LOG_FORMAT` принимает `json` или `text`.
 
-Файл `.env` сам по себе приложением не читается: значения передаются процессу через shell, Compose или среду запуска. `POSTGRES_DSN` обязателен для API и publisher; publisher также требует `RABBITMQ_URL`. Остальные используемые параметры API и пула имеют проверяемые значения по умолчанию. Для локального smoke-запуска можно использовать тестовую PostgreSQL из `docker-compose.test.yaml`. Publisher по умолчанию ищет JSON Schema в `../../contracts/schemas` относительно `apps/api`; путь можно переопределить через `CONTRACTS_SCHEMA_DIR`.
+Файл `.env` сам по себе приложением не читается: значения передаются процессу через shell, Compose или среду запуска. `POSTGRES_DSN` обязателен для API и publisher; publisher также требует `RABBITMQ_URL`. Адрес HTTP-метрик задаётся через `PUBLISHER_METRICS_ADDR`; по умолчанию publisher слушает `127.0.0.1:9091`, endpoint — `/metrics`. Для сбора метрик из другого контейнера задайте доступный только внутри доверенной сети адрес, например `0.0.0.0:9091`. Метрики агрегируются по результату без UUID в labels; OpenMetrics exemplar и структурированный лог события связывают показатель с investigation, job и outbox message. Для локального smoke-запуска можно использовать тестовую PostgreSQL из `docker-compose.test.yaml`. Publisher по умолчанию ищет JSON Schema в `../../contracts/schemas` относительно `apps/api`; путь можно переопределить через `CONTRACTS_SCHEMA_DIR`.
 
 Команды ниже выполняются из корня репозитория после передачи переменных окружения процессу.
 
@@ -147,7 +147,7 @@ go run ./cmd/api
 ```
 
 ```powershell
-# Consumer scaffold в отдельном терминале
+# Go consumer результатов; нужны доступные RabbitMQ и S3/MinIO
 cd apps/api
 go run ./cmd/consumer
 ```
@@ -169,7 +169,7 @@ go run ./cmd/api
 ```
 
 ```bash
-# Consumer scaffold в отдельном терминале
+# Go consumer результатов; нужны доступные RabbitMQ и S3/MinIO
 cd apps/api
 go run ./cmd/consumer
 ```

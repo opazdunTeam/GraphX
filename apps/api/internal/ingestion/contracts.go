@@ -103,6 +103,21 @@ type SourceResultManifest struct {
 	Claims        []Claim        `json:"claims"`
 }
 
+type SourceCollectError struct {
+	Code              string `json:"code"`
+	Classification    string `json:"classification"`
+	Message           string `json:"message"`
+	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
+}
+
+type SourceCollectFailedPayload struct {
+	JobID          string              `json:"job_id"`
+	AttemptNo      int                 `json:"attempt_no"`
+	AdapterVersion string              `json:"adapter_version"`
+	Artifacts      []ArtifactReference `json:"artifacts"`
+	Error          SourceCollectError  `json:"error"`
+}
+
 func (manifest *SourceResultManifest) UnmarshalJSON(data []byte) error {
 	type sourceResultManifestAlias SourceResultManifest
 	decoded := struct {

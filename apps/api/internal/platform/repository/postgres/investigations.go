@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -324,8 +325,10 @@ func (s *InvestigationStore) Create(
 			return investigations.Accepted{}, fmt.Errorf("parse source job id: %w", err)
 		}
 		message := initialJob.Outbox
-		if message.AggregateID() != jobID.String() || message.AttemptNo() != 1 {
-			return investigations.Accepted{}, fmt.Errorf("prepared source collect identity mismatch")
+		if message.AggregateID() != jobID.String() ||
+			strings.TrimSpace(message.Operation()) == "" ||
+			message.AttemptNo() != 1 {
+			return investigations.Accepted{}, fmt.Errorf("prepared source collect identity or operation mismatch")
 		}
 		source := initialJob.Source
 
@@ -335,10 +338,11 @@ func (s *InvestigationStore) Create(
 				id, investigation_id, source_id, operation, purpose,
 				status, attempt_no, max_attempts, request_hash, idempotency_key
 			) values (
-				$1, $2, $3, 'collect', 'subject_discovery',
-				'pending', 1, 3, $4, $5
+				$1, $2, $3, $4, 'subject_discovery',
+				'pending', 1, 3, $5, $6
 			)
-		`, jobID, investigationID, source.ID, command.RequestHash, jobIdempotencyKey); err != nil {
+		`, jobID, investigationID, source.ID, message.Operation(),
+			command.RequestHash, jobIdempotencyKey); err != nil {
 			return investigations.Accepted{}, fmt.Errorf("insert initial source job: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
