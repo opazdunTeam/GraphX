@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	SourceCollectRequestedType = "source.collect.requested.v1"
-	SourceCollectCompletedType = "source.collect.completed.v1"
-	SourceCollectFailedType    = "source.collect.failed.v1"
+	SourceCollectRequestedType   = "source.collect.requested.v1"
+	SourceCollectCompletedType   = "source.collect.completed.v1"
+	SourceCollectFailedType      = "source.collect.failed.v1"
+	SourceSearchSubjectOperation = "search_subject"
 )
 
 type Envelope[T any] struct {

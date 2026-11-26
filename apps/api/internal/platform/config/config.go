@@ -25,6 +25,7 @@ const (
 	defaultPostgresMinConns       = 2
 	defaultPostgresConnectTimeout = 5 * time.Second
 	defaultPostgresHealthTimeout  = 2 * time.Second
+	defaultPublisherMetricsAddr   = "127.0.0.1:9091"
 	defaultInvestigationDepth     = 1
 	maxInvestigationDepth         = 2
 	defaultInvestigationEntities  = 50
@@ -40,10 +41,11 @@ const (
 
 type Config struct {
 	Process
-	HTTP          HTTP
-	Postgres      Postgres
-	RabbitMQ      RabbitMQ
-	Investigation Investigation
+	HTTP                 HTTP
+	Postgres             Postgres
+	RabbitMQ             RabbitMQ
+	PublisherMetricsAddr string
+	Investigation        Investigation
 }
 
 type Process struct {
@@ -122,8 +124,25 @@ func LoadPublisher() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	metricsAddr := strings.TrimSpace(envOrDefault("PUBLISHER_METRICS_ADDR", defaultPublisherMetricsAddr))
+	if metricsAddr == "" {
+		return Config{}, fmt.Errorf("PUBLISHER_METRICS_ADDR must not be empty")
+	}
+	_, port, err := net.SplitHostPort(metricsAddr)
+	if err != nil {
+		return Config{}, fmt.Errorf("PUBLISHER_METRICS_ADDR must be a valid host:port: %w", err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return Config{}, fmt.Errorf("PUBLISHER_METRICS_ADDR must contain a valid port")
+	}
 
-	return Config{Process: process, Postgres: postgres, RabbitMQ: rabbitMQ}, nil
+	return Config{
+		Process:              process,
+		Postgres:             postgres,
+		RabbitMQ:             rabbitMQ,
+		PublisherMetricsAddr: metricsAddr,
+	}, nil
 }
 
 func LoadProcess() (Process, error) {

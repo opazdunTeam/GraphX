@@ -13,7 +13,6 @@ const (
 	testMessageID       = "30000000-0000-4000-8000-000000000001"
 	testJobID           = "20000000-0000-4000-8000-000000000001"
 	testInvestigationID = "10000000-0000-4000-8000-000000000001"
-	testCorrelationID   = "40000000-0000-4000-8000-000000000001"
 )
 
 type testStore struct {
@@ -29,7 +28,7 @@ func TestPublishOneWaitsForBrokerConfirmationBeforeCompletion(t *testing.T) {
 	store := &testStore{message: &Message{
 		ID: testMessageID, Type: "source.collect.requested.v1",
 		AggregateType: "source_job", AggregateID: testJobID,
-		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1}}`),
 	}}
 	broker := &blockingTestBroker{
 		started: make(chan struct{}),
@@ -110,7 +109,7 @@ func TestPublishOneMarksPublishedOnlyAfterBrokerConfirm(t *testing.T) {
 	store := &testStore{message: &Message{
 		ID: testMessageID, Type: "source.collect.requested.v1",
 		AggregateType: "source_job", AggregateID: testJobID,
-		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","attempt_no":3}}`),
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":3}}`),
 	}}
 	broker := &testBroker{}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -179,13 +178,31 @@ func TestPublishOneRejectsMismatchedSourceJobPayload(t *testing.T) {
 	}
 }
 
+func TestPublishOneRejectsMismatchedCorrelationAndInvestigationIDs(t *testing.T) {
+	store := &testStore{message: &Message{
+		ID: testMessageID, Type: sourceCollectRequestedType,
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"40000000-0000-4000-8000-000000000001","payload":{"job_id":"` + testJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1}}`),
+	}}
+	broker := &testBroker{}
+	publisher, err := NewPublisher(store, broker, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := publisher.PublishOne(context.Background())
+	if !result.Processed || !IsDeferred(err) || broker.published || store.published || !store.rescheduled {
+		t.Fatalf("PublishOne() = %#v, %v broker=%t store=%t/%t", result, err, broker.published, store.published, store.rescheduled)
+	}
+}
+
 func TestPublishOneAcceptsEquivalentUUIDAndIntegralNumberRepresentations(t *testing.T) {
 	upperMessageID := "30000000-0000-4000-8000-00000000ABCD"
 	upperJobID := "20000000-0000-4000-8000-00000000ABCD"
 	store := &testStore{message: &Message{
 		ID: strings.ToLower(upperMessageID), Type: sourceCollectRequestedType,
 		AggregateType: "source_job", AggregateID: strings.ToLower(upperJobID),
-		Payload: []byte(`{"message_id":"` + upperMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testCorrelationID + `","payload":{"job_id":"` + upperJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1e0}}`),
+		Payload: []byte(`{"message_id":"` + upperMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + upperJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1e0}}`),
 	}}
 	broker := &testBroker{}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -200,7 +217,7 @@ func TestPublishOneAcceptsEquivalentUUIDAndIntegralNumberRepresentations(t *test
 	if broker.message.ID != upperMessageID || broker.message.AggregateID != upperJobID || store.attemptNo != 1 {
 		t.Fatalf("wire identity = %q/%q attempt %d", broker.message.ID, broker.message.AggregateID, store.attemptNo)
 	}
-	if result.InvestigationID != testInvestigationID || result.CorrelationID != testCorrelationID {
+	if result.InvestigationID != testInvestigationID || result.CorrelationID != testInvestigationID {
 		t.Fatalf("result identity = investigation %q correlation %q", result.InvestigationID, result.CorrelationID)
 	}
 }

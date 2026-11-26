@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,12 +21,6 @@ import (
 )
 
 const publisherPollInterval = time.Second
-
-type publisherMetrics struct {
-	published uint64
-	deferred  uint64
-	failed    uint64
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -83,23 +78,51 @@ func run() error {
 		return fmt.Errorf("initialize outbox publisher: %w", err)
 	}
 
+	metrics, err := newPublisherMetrics()
+	if err != nil {
+		return fmt.Errorf("initialize publisher metrics: %w", err)
+	}
+	metricsServer, metricsServerErr, err := startPublisherMetricsServer(
+		cfg.PublisherMetricsAddr,
+		metrics,
+	)
+	if err != nil {
+		return fmt.Errorf("start publisher metrics server: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("stop publisher metrics server", "error", err)
+		}
+	}()
+
 	logger.Info("outbox publisher started")
 	ticker := time.NewTicker(publisherPollInterval)
 	defer ticker.Stop()
-	var metrics publisherMetrics
-
 	for {
 		if err := ctx.Err(); err != nil {
 			logger.Info("outbox publisher stopping")
 			return nil
 		}
+		select {
+		case serveErr := <-metricsServerErr:
+			if serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
+				return errors.New("publisher metrics server stopped unexpectedly")
+			}
+			return fmt.Errorf("publisher metrics server failed: %w", serveErr)
+		default:
+		}
+		publishStartedAt := time.Now()
 		result, err := publisher.PublishOne(ctx)
+		publishDuration := time.Since(publishStartedAt)
 		if err != nil {
 			if ctx.Err() != nil {
 				logger.Info("outbox publisher stopping")
 				return nil
 			}
 			if outbox.IsDeferred(err) {
+				metrics.record("deferred", publishDuration, result)
 				metrics.deferred++
 				logger.Warn("outbox message deferred", publisherLogFields(
 					result,
@@ -108,6 +131,7 @@ func run() error {
 				)...)
 				continue
 			}
+			metrics.record("failed", publishDuration, result)
 			metrics.failed++
 			logger.Error("outbox publisher processing failed", publisherLogFields(
 				result,
@@ -117,6 +141,7 @@ func run() error {
 			return errors.New("outbox publisher processing failed")
 		}
 		if result.Published {
+			metrics.record("published", publishDuration, result)
 			metrics.published++
 			logger.Info("outbox message published", publisherLogFields(
 				result,
@@ -131,6 +156,11 @@ func run() error {
 		select {
 		case <-ctx.Done():
 		case <-ticker.C:
+		case serveErr := <-metricsServerErr:
+			if serveErr == nil || errors.Is(serveErr, http.ErrServerClosed) {
+				return errors.New("publisher metrics server stopped unexpectedly")
+			}
+			return fmt.Errorf("publisher metrics server failed: %w", serveErr)
 		}
 	}
 }
@@ -145,7 +175,7 @@ func deferredReason(err error) string {
 func publisherLogFields(
 	result outbox.PublishResult,
 	outcome string,
-	metrics publisherMetrics,
+	metrics *publisherMetrics,
 ) []any {
 	return []any{
 		"outcome", outcome,

@@ -20,6 +20,7 @@ type PreparedOutboxMessage struct {
 	id          string
 	messageType string
 	aggregateID string
+	operation   string
 	attemptNo   int
 	payloadJSON string
 }
@@ -29,6 +30,7 @@ var _ orchestration.OutboxMessage = PreparedOutboxMessage{}
 func (m PreparedOutboxMessage) OutboxID() string    { return m.id }
 func (m PreparedOutboxMessage) MessageType() string { return m.messageType }
 func (m PreparedOutboxMessage) AggregateID() string { return m.aggregateID }
+func (m PreparedOutboxMessage) Operation() string   { return m.operation }
 func (m PreparedOutboxMessage) AttemptNo() int      { return m.attemptNo }
 func (m PreparedOutboxMessage) JSONPayload() string { return m.payloadJSON }
 
@@ -72,7 +74,7 @@ func (f *SourceCollectOutboxFactory) PrepareSourceCollect(
 			AttemptNo:       1,
 			InvestigationID: investigationID,
 			Source:          sourceCode,
-			Operation:       "collect",
+			Operation:       SourceSearchSubjectOperation,
 			Purpose:         "subject_discovery",
 			Query:           query,
 			Limits: CollectLimits{
@@ -136,6 +138,7 @@ func PrepareSourceCollectRequestedMessage(
 		id:          decoded.MessageID,
 		messageType: validated.Type,
 		aggregateID: decoded.Payload.JobID,
+		operation:   decoded.Payload.Operation,
 		attemptNo:   decoded.Payload.AttemptNo,
 		payloadJSON: string(validated.Raw),
 	}, nil

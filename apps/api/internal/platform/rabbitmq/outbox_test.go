@@ -34,6 +34,7 @@ func TestSourceCollectOutboxFactoryProducesValidatedCommand(t *testing.T) {
 	}
 	if message.AttemptNo() != 1 ||
 		message.AggregateID() != "20000000-0000-4000-8000-000000000091" ||
+		message.Operation() != SourceSearchSubjectOperation ||
 		message.OutboxID() != "30000000-0000-4000-8000-000000000091" {
 		t.Fatalf("prepared message identity = %#v", message)
 	}

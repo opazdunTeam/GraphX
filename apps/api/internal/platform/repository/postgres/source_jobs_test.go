@@ -15,13 +15,14 @@ func TestValidateOutboxMessage(t *testing.T) {
 		attemptNo int
 		wantError bool
 	}{
-		{name: "complete", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2},
+		{name: "complete", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", operation: "search_subject", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2},
 		{name: "nil", jobID: "job", attemptNo: 2, wantError: true},
-		{name: "missing id", message: testOutboxMessage{messageType: "type", aggregateID: "job", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
-		{name: "missing type", message: testOutboxMessage{id: "message", aggregateID: "job", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
-		{name: "missing payload", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", attemptNo: 2}, jobID: "job", attemptNo: 2, wantError: true},
-		{name: "wrong aggregate", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "other", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
-		{name: "wrong attempt", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", attemptNo: 1, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "missing id", message: testOutboxMessage{messageType: "type", aggregateID: "job", operation: "search_subject", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "missing type", message: testOutboxMessage{id: "message", aggregateID: "job", operation: "search_subject", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "missing operation", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "missing payload", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", operation: "search_subject", attemptNo: 2}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "wrong aggregate", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "other", operation: "search_subject", attemptNo: 2, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
+		{name: "wrong attempt", message: testOutboxMessage{id: "message", messageType: "type", aggregateID: "job", operation: "search_subject", attemptNo: 1, payloadJSON: `{}`}, jobID: "job", attemptNo: 2, wantError: true},
 	}
 
 	for _, test := range tests {
@@ -38,6 +39,7 @@ type testOutboxMessage struct {
 	id          string
 	messageType string
 	aggregateID string
+	operation   string
 	attemptNo   int
 	payloadJSON string
 }
@@ -45,6 +47,7 @@ type testOutboxMessage struct {
 func (m testOutboxMessage) OutboxID() string    { return m.id }
 func (m testOutboxMessage) MessageType() string { return m.messageType }
 func (m testOutboxMessage) AggregateID() string { return m.aggregateID }
+func (m testOutboxMessage) Operation() string   { return m.operation }
 func (m testOutboxMessage) AttemptNo() int      { return m.attemptNo }
 func (m testOutboxMessage) JSONPayload() string { return m.payloadJSON }
 
@@ -66,7 +69,7 @@ func sourceCollectRequestedOutboxMessage(
 			"attempt_no":%d,
 			"investigation_id":%q,
 			"source":"fixture",
-			"operation":"collect",
+			"operation":"search_subject",
 			"purpose":"subject_discovery",
 			"query":{"type":"person","name":"Ada Lovelace"},
 			"limits":{"max_records":20,"max_bytes":1048576,"timeout_seconds":30},
@@ -77,6 +80,7 @@ func sourceCollectRequestedOutboxMessage(
 		id:          messageID,
 		messageType: "source.collect.requested.v1",
 		aggregateID: jobID,
+		operation:   "search_subject",
 		attemptNo:   attemptNo,
 		payloadJSON: payloadJSON,
 	}

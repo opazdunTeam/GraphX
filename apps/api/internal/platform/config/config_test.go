@@ -23,6 +23,7 @@ var apiEnvKeys = []string{
 	"POSTGRES_CONNECT_TIMEOUT",
 	"POSTGRES_HEALTH_TIMEOUT",
 	"RABBITMQ_URL",
+	"PUBLISHER_METRICS_ADDR",
 	"INVESTIGATION_DEFAULT_DEPTH",
 	"INVESTIGATION_MAX_DEPTH",
 	"INVESTIGATION_DEFAULT_ENTITY_LIMIT",
@@ -171,6 +172,36 @@ func TestLoadPublisherRequiresValidRabbitMQURL(t *testing.T) {
 	}
 	if cfg.RabbitMQ.URL != "amqps://publisher:secret@rabbitmq.example:5671/graphx" {
 		t.Fatal("LoadPublisher() did not preserve the configured RabbitMQ URL")
+	}
+	if cfg.PublisherMetricsAddr != defaultPublisherMetricsAddr {
+		t.Fatalf("PublisherMetricsAddr = %q, want %q", cfg.PublisherMetricsAddr, defaultPublisherMetricsAddr)
+	}
+
+	cleanAPIEnv(t)
+	t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+	t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@rabbitmq:5672/graphx")
+	t.Setenv("PUBLISHER_METRICS_ADDR", "0.0.0.0:9092")
+	cfg, err = LoadPublisher()
+	if err != nil {
+		t.Fatalf("LoadPublisher() with metrics address override error = %v", err)
+	}
+	if cfg.PublisherMetricsAddr != "0.0.0.0:9092" {
+		t.Fatalf("PublisherMetricsAddr = %q, want 0.0.0.0:9092", cfg.PublisherMetricsAddr)
+	}
+}
+
+func TestLoadPublisherRejectsInvalidMetricsAddress(t *testing.T) {
+	tests := []string{"", "9091", "localhost", "127.0.0.1:service", "127.0.0.1:65536"}
+	for _, address := range tests {
+		t.Run(address, func(t *testing.T) {
+			cleanAPIEnv(t)
+			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
+			t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@rabbitmq:5672/graphx")
+			t.Setenv("PUBLISHER_METRICS_ADDR", address)
+			if _, err := LoadPublisher(); err == nil {
+				t.Fatal("LoadPublisher() error = nil, want metrics address validation error")
+			}
+		})
 	}
 }
 
