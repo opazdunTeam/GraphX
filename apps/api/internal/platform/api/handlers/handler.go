@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 )
@@ -18,14 +19,24 @@ type Handler struct {
 	readiness        readinessChecker
 	readinessTimeout time.Duration
 	investigation    config.Investigation
+	create           investigations.CreateUseCase
 }
 
-func New(readiness readinessChecker, readinessTimeout time.Duration, investigation config.Investigation) *Handler {
-	return &Handler{
+func New(
+	readiness readinessChecker,
+	readinessTimeout time.Duration,
+	investigation config.Investigation,
+	creators ...investigations.CreateUseCase,
+) *Handler {
+	handler := &Handler{
 		readiness:        readiness,
 		readinessTimeout: readinessTimeout,
 		investigation:    investigation,
 	}
+	if len(creators) > 0 {
+		handler.create = creators[0]
+	}
+	return handler
 }
 
 func (h *Handler) Liveness(c *gin.Context) {

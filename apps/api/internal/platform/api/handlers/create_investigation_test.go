@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,7 +10,24 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
 )
+
+type fakeInvestigationCreator struct {
+	accepted investigations.Accepted
+	err      error
+	command  investigations.CreateCommand
+}
+
+func (f *fakeInvestigationCreator) Create(
+	_ context.Context,
+	command investigations.CreateCommand,
+) (investigations.Accepted, error) {
+	f.command = command
+	return f.accepted, f.err
+}
 
 func createInvestigationContext(body string, contentType string) *gin.Context {
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -105,5 +123,67 @@ func TestBindCreateInvestigationRequestRequiresJSONContentType(t *testing.T) {
 	_, err := investigationHandler().bindCreateInvestigationRequest(context)
 	if !errors.Is(err, errUnsupportedMediaType) {
 		t.Fatalf("bindCreateInvestigationRequest() error = %v, want unsupported media type", err)
+	}
+}
+
+func TestCreateInvestigationReturnsAcceptedAndStoresNormalizedCommand(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	creator := &fakeInvestigationCreator{
+		accepted: investigations.Accepted{
+			ID:        "00000000-0000-4000-8000-000000000099",
+			StatusURL: "/api/v1/investigations/00000000-0000-4000-8000-000000000099/status",
+		},
+	}
+	handler := investigationHandler()
+	handler.create = creator
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/investigations",
+		strings.NewReader(`{"subject":{"type":"person","name":" Ada "},"limits":{"depth":1,"entity_limit":50,"sources":["fixture"]}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	key := uuid.MustParse("00000000-0000-4000-8000-000000000098")
+	handler.CreateInvestigation(context, generated.CreateInvestigationParams{IdempotencyKey: key})
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", recorder.Code)
+	}
+	if recorder.Header().Get("Location") != creator.accepted.StatusURL {
+		t.Fatalf("Location = %q, want %q", recorder.Header().Get("Location"), creator.accepted.StatusURL)
+	}
+	if creator.command.IdempotencyKey != key.String() || creator.command.RequestHash == "" {
+		t.Fatalf("command = %#v, want key and request hash", creator.command)
+	}
+	if creator.command.Subject.Name == nil || *creator.command.Subject.Name != " Ada " {
+		t.Fatalf("subject name = %v, want raw handler subject", creator.command.Subject.Name)
+	}
+}
+
+func TestCreateInvestigationMapsIdempotencyConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := investigationHandler()
+	handler.create = &fakeInvestigationCreator{
+		err: &investigations.IdempotencyConflictError{
+			Key: "00000000-0000-4000-8000-000000000098",
+		},
+	}
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/investigations",
+		strings.NewReader(`{"subject":{"type":"person","name":"Ada"}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	key := uuid.MustParse("00000000-0000-4000-8000-000000000098")
+	handler.CreateInvestigation(context, generated.CreateInvestigationParams{IdempotencyKey: key})
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"IDEMPOTENCY_CONFLICT"`) {
+		t.Fatalf("body = %s, want idempotency conflict", recorder.Body.String())
 	}
 }

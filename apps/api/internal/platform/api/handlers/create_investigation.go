@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/contractjson"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
 )
 
@@ -22,8 +24,10 @@ const (
 var errUnsupportedMediaType = errors.New("request content type must be application/json")
 
 type createInvestigationInput struct {
-	Subject generated.SubjectInput
-	Limits  InvestigationLimits
+	Subject     generated.SubjectInput
+	Limits      InvestigationLimits
+	RequestHash string
+	RawSubject  json.RawMessage
 }
 
 type createInvestigationRequest struct {
@@ -37,10 +41,19 @@ func (h *Handler) bindCreateInvestigationRequest(c *gin.Context) (createInvestig
 	}
 
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCreateInvestigationRequestBytes)
-	decoder := json.NewDecoder(c.Request.Body)
-	decoder.DisallowUnknownFields()
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return createInvestigationInput{}, err
+	}
+	canonicalBody, err := contractjson.Canonicalize(rawBody)
+	if err != nil {
+		return createInvestigationInput{}, fmt.Errorf("decode request body: %w", err)
+	}
+	requestHash := sha256.Sum256(canonicalBody)
 
 	var request createInvestigationRequest
+	decoder := json.NewDecoder(bytes.NewReader(rawBody))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		return createInvestigationInput{}, fmt.Errorf("decode request body: %w", err)
 	}
@@ -62,7 +75,21 @@ func (h *Handler) bindCreateInvestigationRequest(c *gin.Context) (createInvestig
 		return createInvestigationInput{}, err
 	}
 
-	return createInvestigationInput{Subject: subject, Limits: limits}, nil
+	rawSubject, err := json.Marshal(request.Subject)
+	if err != nil {
+		return createInvestigationInput{}, fmt.Errorf("serialize raw subject: %w", err)
+	}
+	rawSubject, err = contractjson.Canonicalize(rawSubject)
+	if err != nil {
+		return createInvestigationInput{}, fmt.Errorf("serialize raw subject: %w", err)
+	}
+
+	return createInvestigationInput{
+		Subject:     subject,
+		Limits:      limits,
+		RequestHash: fmt.Sprintf("%x", requestHash),
+		RawSubject:  rawSubject,
+	}, nil
 }
 
 func requireJSONContentType(value string) error {

@@ -333,6 +333,33 @@ func run() error {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
 		return fmt.Errorf("verify transactional outbox lease migration: %w", err)
 	}
+	if err := executeGoose("up-to", "9"); err != nil {
+		_ = execute("docker", append(composeArgs, "down", "-v")...)
+		return fmt.Errorf("apply investigation creation migration: %w", err)
+	}
+	if err := executePSQL(`
+		do $$
+		begin
+			if (select max(version_id) from goose_db_version where is_applied) <> 9
+				or not exists (
+					select 1 from information_schema.columns
+					where table_name = 'investigations' and column_name = 'raw_subject'
+				)
+				or not exists (
+					select 1 from information_schema.columns
+					where table_name = 'investigations' and column_name = 'normalized_subject'
+				)
+				or (select column_default from information_schema.columns
+					where table_name = 'investigations' and column_name = 'state_version') not in ('1', '1::bigint')
+			then
+				raise exception 'version 9 investigation creation schema is invalid';
+			end if;
+		end
+		$$
+	`); err != nil {
+		_ = execute("docker", append(composeArgs, "down", "-v")...)
+		return fmt.Errorf("verify investigation creation migration: %w", err)
+	}
 
 	testCommand := exec.Command(
 		"go",
