@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/orchestration"
 )
 
@@ -29,6 +31,68 @@ func (m PreparedOutboxMessage) MessageType() string { return m.messageType }
 func (m PreparedOutboxMessage) AggregateID() string { return m.aggregateID }
 func (m PreparedOutboxMessage) AttemptNo() int      { return m.attemptNo }
 func (m PreparedOutboxMessage) JSONPayload() string { return m.payloadJSON }
+
+type SourceCollectOutboxFactory struct {
+	registry *SchemaRegistry
+}
+
+var _ investigations.OutboxFactory = (*SourceCollectOutboxFactory)(nil)
+var _ investigations.OutboxMessage = PreparedOutboxMessage{}
+
+func NewSourceCollectOutboxFactory(registry *SchemaRegistry) (*SourceCollectOutboxFactory, error) {
+	if registry == nil {
+		return nil, errors.New("RabbitMQ schema registry is required")
+	}
+	return &SourceCollectOutboxFactory{registry: registry}, nil
+}
+
+func (f *SourceCollectOutboxFactory) PrepareSourceCollect(
+	investigationID, jobID, outboxID, sourceCode string,
+	command investigations.CreateCommand,
+	now time.Time,
+) (investigations.OutboxMessage, error) {
+	query := SourceQuery{
+		Type:        command.Subject.Type,
+		Identifiers: command.Subject.Identifiers,
+	}
+	if command.Subject.Name != nil {
+		query.Name = command.Subject.Name
+	}
+	envelope := Envelope[SourceCollectRequestedPayload]{
+		MessageID:     outboxID,
+		Type:          SourceCollectRequestedType,
+		SchemaVersion: 1,
+		OccurredAt:    now,
+		CorrelationID: investigationID,
+		CausationID:   nil,
+		Producer:      "graphx-api",
+		RootCommandID: outboxID,
+		Payload: SourceCollectRequestedPayload{
+			JobID:           jobID,
+			AttemptNo:       1,
+			InvestigationID: investigationID,
+			Source:          sourceCode,
+			Operation:       "collect",
+			Purpose:         "subject_discovery",
+			Query:           query,
+			Limits: CollectLimits{
+				MaxRecords:     command.Limits.EntityLimit,
+				MaxBytes:       1 << 20,
+				TimeoutSeconds: 30,
+			},
+			Deadline: now.Add(30 * time.Second),
+		},
+	}
+	return PrepareSourceCollectRequestedMessage(
+		f.registry,
+		envelope,
+		SourceCollectRequestedIdentity{
+			MessageID: outboxID,
+			JobID:     jobID,
+			AttemptNo: 1,
+		},
+	)
+}
 
 func PrepareSourceCollectRequestedMessage(
 	registry *SchemaRegistry,

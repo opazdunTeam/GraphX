@@ -32,6 +32,8 @@ flowchart LR
 
 `investigations` хранит входные данные, этап, общий статус, ограничения, число ожидающих решений и `state_version`. Основные статусы: `created`, `running`, `completed`, `completed_partial`, `failed`, `cancelled`. Этапы: `subject_discovery`, `subject_resolution`, `enrichment`, `analysis`, `completed`. Новая строка всегда начинается в `created` / `subject_discovery`; рабочие и terminal-состояния достигаются только через документированные `UPDATE`-переходы.
 
+Для HTTP-создания исходный subject сохраняется отдельно в `raw_subject`, а нормализованный вид используется в `normalized_subject`; `subject_query` сохраняет совместимое представление исходного ввода. `limits` хранит применённые depth, entity limit и явный source selection. Создание investigation переводит его в `running` в той же транзакции, что создаёт initial source jobs и outbox rows.
+
 `sources` - справочник адаптеров: код, название, режим работы, признак включения и порядок запуска. Секретов в этой таблице нет.
 
 `source_jobs` - бизнес-состояние обращения к источнику. Оно не является копией очереди. Поля должны включать расследование, источник, операцию, назначение, status, номер попытки, лимит попыток, время следующего повтора, request hash, idempotency key и сведения об ошибке. Новая строка создаётся только для `running` investigation в состоянии `pending` с `attempt_no = 1`. Переходы, запускающие или планирующие работу (`pending`, `queued`, `running`, `retry_wait`), повторно проверяют investigation под блокировкой; terminal investigation не может получить новую или возобновлённую работу.

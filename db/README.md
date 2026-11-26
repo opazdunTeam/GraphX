@@ -11,10 +11,11 @@
 5. `005_entities.sql` - `entities`, активные проекции имён и идентификаторов;
 6. `006_matching.sql` - reviews, candidates, append-only decisions, обратимые links записей к entities и состав расследования; эта версия завершает задачу #72;
 7. `007_artifact_lineage.sql` - безопасное исходное имя и parent provenance неизменяемых artifacts;
-8. `008_outbox_leases.sql` - временная аренда outbox-сообщений для безопасной работы нескольких publishers.
+8. `008_outbox_leases.sql` - временная аренда outbox-сообщений для безопасной работы нескольких publishers;
+9. `009_investigation_creation.sql` - разделение raw и normalized subject и начальная версия состояния investigation.
 
 Смысл таблиц и основные инварианты описаны в [модели данных](../docs/07-data-model.md). SQL определяет точную физическую схему, а ERD должна обновляться вместе с изменением состава таблиц и колонок.
 
 Миграции запускаются отдельно от API. Команды `migrate-status`, `migrate-up`, `migrate-down` и защищённый `migrate-reset-local` определены в [`apps/api/Makefile`](../apps/api/Makefile). Они используют `POSTGRES_DSN` и закреплённую версию goose. Локальный reset допустим только для пустой учебной базы с `APP_ENV=local` и `CONFIRM_RESET=1`.
 
-`make test-integration` поднимает PostgreSQL 18, проверяет оба пути владения `pg_trgm` (preinstalled и созданный миграцией), защиту ownership-marker, конфликтующий и повторный fixture seed, no-op rollback fixture после появления зависимого job, границы версий 4/5/6/7/8, отказ перехода 5→6 при любых active/inactive orphan projections и конкурентную блокировку их вставки, аренду и повторную выдачу outbox-сообщений, pgx и migration integration tests, полный goose reset. После прогона удаляются тестовые контейнер и сеть; данные PostgreSQL хранятся в `tmpfs` и исчезают вместе с контейнером.
+`make test-integration` поднимает PostgreSQL 18, проверяет оба пути владения `pg_trgm` (preinstalled и созданный миграцией), защиту ownership-marker, конфликтующий и повторный fixture seed, no-op rollback fixture после появления зависимого job, границы версий 4/5/6/7/8/9, отказ перехода 5→6 при любых active/inactive orphan projections и конкурентную блокировку их вставки, аренду и повторную выдачу outbox-сообщений, создание investigation и атомарность его начальных jobs, pgx и migration integration tests, полный goose reset. После прогона удаляются тестовые контейнер и сеть; данные PostgreSQL хранятся в `tmpfs` и исчезают вместе с контейнером.

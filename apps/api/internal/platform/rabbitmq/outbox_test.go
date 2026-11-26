@@ -4,7 +4,43 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 )
+
+func TestSourceCollectOutboxFactoryProducesValidatedCommand(t *testing.T) {
+	registry, _ := sourceCollectRequestedFixture(t)
+	factory, err := NewSourceCollectOutboxFactory(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Ada Lovelace"
+	command := investigations.CreateCommand{
+		Subject: investigations.Subject{Type: "person", Name: &name},
+		Limits:  investigations.Limits{EntityLimit: 50},
+	}
+	now := time.Date(2026, 11, 26, 6, 0, 0, 0, time.UTC)
+	message, err := factory.PrepareSourceCollect(
+		"10000000-0000-4000-8000-000000000091",
+		"20000000-0000-4000-8000-000000000091",
+		"30000000-0000-4000-8000-000000000091",
+		"fixture",
+		command,
+		now,
+	)
+	if err != nil {
+		t.Fatalf("PrepareSourceCollect() error = %v", err)
+	}
+	if message.AttemptNo() != 1 ||
+		message.AggregateID() != "20000000-0000-4000-8000-000000000091" ||
+		message.OutboxID() != "30000000-0000-4000-8000-000000000091" {
+		t.Fatalf("prepared message identity = %#v", message)
+	}
+	if _, err := registry.ValidateMessage([]byte(message.JSONPayload())); err != nil {
+		t.Fatalf("factory payload is not contract-valid: %v", err)
+	}
+}
 
 func TestPrepareSourceCollectRequestedMessage(t *testing.T) {
 	registry, envelope := sourceCollectRequestedFixture(t)

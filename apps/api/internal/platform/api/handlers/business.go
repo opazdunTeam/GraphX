@@ -3,8 +3,11 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/utils"
 )
@@ -55,9 +58,10 @@ func (h *Handler) ExpandEntity(
 
 func (h *Handler) CreateInvestigation(
 	c *gin.Context,
-	_ generated.CreateInvestigationParams,
+	params generated.CreateInvestigationParams,
 ) {
-	if _, err := h.bindCreateInvestigationRequest(c); err != nil {
+	input, err := h.bindCreateInvestigationRequest(c)
+	if err != nil {
 		status := http.StatusBadRequest
 		code := "INVALID_REQUEST"
 		title := "Invalid request"
@@ -84,7 +88,135 @@ func (h *Handler) CreateInvestigation(
 		)
 		return
 	}
-	h.notImplemented(c)
+	if h.create == nil {
+		h.notImplemented(c)
+		return
+	}
+
+	subject, err := subjectFromGenerated(input.Subject)
+	if err != nil {
+		utils.WriteProblem(c, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request", err.Error())
+		return
+	}
+	command := investigations.CreateCommand{
+		IdempotencyKey: params.IdempotencyKey.String(),
+		RequestHash:    input.RequestHash,
+		RawSubject:     input.RawSubject,
+		Subject:        subject,
+		Limits: investigations.Limits{
+			Depth:       input.Limits.Depth,
+			EntityLimit: input.Limits.EntityLimit,
+			Sources:     append([]string(nil), input.Limits.Sources...),
+		},
+	}
+	accepted, err := h.create.Create(c.Request.Context(), command)
+	if err != nil {
+		var conflict *investigations.IdempotencyConflictError
+		var inProgress *investigations.IdempotencyInProgressError
+		var sourceSelection *investigations.SourceSelectionError
+		switch {
+		case errors.As(err, &conflict):
+			utils.WriteProblem(
+				c,
+				http.StatusConflict,
+				"IDEMPOTENCY_CONFLICT",
+				"Idempotency key conflict",
+				"The same Idempotency-Key was used with a different request.",
+			)
+		case errors.As(err, &inProgress):
+			utils.WriteProblem(
+				c,
+				http.StatusConflict,
+				"IDEMPOTENCY_IN_PROGRESS",
+				"Idempotency key in progress",
+				"A request with this Idempotency-Key is already in progress.",
+			)
+		case errors.As(err, &sourceSelection):
+			detail := "One or more selected sources are unknown or disabled."
+			if len(sourceSelection.Unknown) > 0 {
+				detail = "Unknown source codes: " + strings.Join(sourceSelection.Unknown, ", ") + "."
+			} else if len(sourceSelection.Disabled) > 0 {
+				detail = "Disabled source codes: " + strings.Join(sourceSelection.Disabled, ", ") + "."
+			}
+			utils.WriteProblem(
+				c,
+				http.StatusBadRequest,
+				"SOURCE_NOT_AVAILABLE",
+				"Source not available",
+				detail,
+			)
+		default:
+			utils.WriteProblem(
+				c,
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Internal server error",
+				"The investigation could not be created.",
+			)
+		}
+		return
+	}
+
+	investigationID, err := uuid.Parse(accepted.ID)
+	if err != nil {
+		utils.WriteProblem(
+			c,
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Internal server error",
+			"The investigation could not be created.",
+		)
+		return
+	}
+	c.Header("Location", accepted.StatusURL)
+	c.JSON(http.StatusAccepted, generated.InvestigationAccepted{
+		Id:        investigationID,
+		Status:    generated.InvestigationAcceptedStatusRunning,
+		Stage:     generated.InvestigationAcceptedStageSubjectDiscovery,
+		StatusUrl: accepted.StatusURL,
+	})
+}
+
+func subjectFromGenerated(input generated.SubjectInput) (investigations.Subject, error) {
+	if named, err := input.AsNamedSubjectInput(); err == nil {
+		identifiers := copyIdentifierPointer(named.Identifiers)
+		return investigations.Subject{
+			Type:        string(named.Type),
+			Name:        &named.Name,
+			Identifiers: identifiers,
+		}, nil
+	}
+	identified, err := input.AsIdentifiedSubjectInput()
+	if err != nil {
+		return investigations.Subject{}, err
+	}
+	identifiers := copyIdentifierMap(identified.Identifiers)
+	return investigations.Subject{
+		Type:        string(identified.Type),
+		Identifiers: identifiers,
+	}, nil
+}
+
+func copyIdentifierPointer(input *map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	result := make(map[string]string, len(*input))
+	for key, value := range *input {
+		result[key] = value
+	}
+	return result
+}
+
+func copyIdentifierMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	result := make(map[string]string, len(input))
+	for key, value := range input {
+		result[key] = value
+	}
+	return result
 }
 
 func (h *Handler) GetInvestigation(

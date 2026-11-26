@@ -8,12 +8,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/handlers"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/router"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/logging"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/rabbitmq"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/repository/postgres"
 )
 
@@ -42,7 +46,24 @@ func run() error {
 	}
 	defer pool.Close()
 
-	handler := handlers.New(pool, cfg.Postgres.HealthTimeout, cfg.Investigation)
+	investigationStore := postgres.NewInvestigationStore(pool)
+	schemaDir := strings.TrimSpace(os.Getenv("CONTRACTS_SCHEMA_DIR"))
+	if schemaDir == "" {
+		schemaDir = filepath.Join("..", "..", "contracts", "schemas")
+	}
+	schemaRegistry, err := rabbitmq.NewSchemaRegistry(schemaDir)
+	if err != nil {
+		return fmt.Errorf("load RabbitMQ message schemas: %w", err)
+	}
+	outboxFactory, err := rabbitmq.NewSourceCollectOutboxFactory(schemaRegistry)
+	if err != nil {
+		return fmt.Errorf("initialize source collect outbox factory: %w", err)
+	}
+	investigationCreator, err := investigations.NewCreator(investigationStore, outboxFactory)
+	if err != nil {
+		return fmt.Errorf("initialize investigation creator: %w", err)
+	}
+	handler := handlers.New(pool, cfg.Postgres.HealthTimeout, cfg.Investigation, investigationCreator)
 	server := router.NewServer(cfg, logger, handler)
 
 	errCh := make(chan error, 1)
