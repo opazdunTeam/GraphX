@@ -39,7 +39,7 @@ apps/api/
 ### Точки запуска
 
 - `cmd/api` собирает зависимости и запускает HTTP-сервер;
-- `cmd/consumer` сейчас запускает lifecycle scaffold; после подключения messaging runtime эта точка входа будет принимать результаты workers из RabbitMQ.
+- `cmd/consumer` принимает completed/failed результаты workers из RabbitMQ, проверяет контракты и сохраняет их вместе с бизнес-эффектами в PostgreSQL одной транзакцией. Для запуска нужны настройки PostgreSQL, RabbitMQ и S3/MinIO.
 - `cmd/publisher` выбирает сообщения только из `outbox_messages`, публикует постоянные сообщения и фиксирует отправку после RabbitMQ confirm. После подтверждения он читает состояние связанного задания и расследования, чтобы выполнить условный переход задания в `queued`; `source_jobs` не используется как очередь публикации.
 
 ### Предметные модули
@@ -147,7 +147,7 @@ go run ./cmd/api
 ```
 
 ```powershell
-# Consumer scaffold в отдельном терминале
+# Go consumer результатов; нужны доступные RabbitMQ и S3/MinIO
 cd apps/api
 go run ./cmd/consumer
 ```
@@ -169,7 +169,7 @@ go run ./cmd/api
 ```
 
 ```bash
-# Consumer scaffold в отдельном терминале
+# Go consumer результатов; нужны доступные RabbitMQ и S3/MinIO
 cd apps/api
 go run ./cmd/consumer
 ```

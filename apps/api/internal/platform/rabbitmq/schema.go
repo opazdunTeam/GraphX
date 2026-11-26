@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/contractjson"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/ingestion"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -121,6 +122,21 @@ func (r *SchemaRegistry) ValidateManifest(raw []byte) error {
 		return fmt.Errorf("validate source result manifest: %w", err)
 	}
 	return nil
+}
+
+func (r *SchemaRegistry) ValidateResultMessage(raw []byte) (ingestion.ValidatedResultMessage, error) {
+	message, err := r.ValidateMessage(raw)
+	if err != nil {
+		return ingestion.ValidatedResultMessage{}, err
+	}
+	return ingestion.ValidatedResultMessage{
+		Type:    message.Type,
+		Payload: message.Payload,
+	}, nil
+}
+
+func (r *SchemaRegistry) ValidateResultManifest(raw []byte) error {
+	return r.ValidateManifest(raw)
 }
 
 func decodeJSON(raw []byte) (any, error) {

@@ -26,6 +26,12 @@ const (
 	defaultPostgresConnectTimeout = 5 * time.Second
 	defaultPostgresHealthTimeout  = 2 * time.Second
 	defaultPublisherMetricsAddr   = "127.0.0.1:9091"
+	defaultRabbitMQPrefetch       = 4
+	defaultRabbitMQConnectTimeout = 10 * time.Second
+	defaultS3ConnectTimeout       = 10 * time.Second
+	defaultS3ReadTimeout          = 30 * time.Second
+	defaultResultMessageMaxBytes  = 1 * 1024 * 1024
+	defaultResultManifestMaxBytes = 16 * 1024 * 1024
 	defaultInvestigationDepth     = 1
 	maxInvestigationDepth         = 2
 	defaultInvestigationEntities  = 50
@@ -46,6 +52,8 @@ type Config struct {
 	RabbitMQ             RabbitMQ
 	PublisherMetricsAddr string
 	Investigation        Investigation
+	Consumer             Consumer
+	ObjectStore          ObjectStore
 }
 
 type Process struct {
@@ -73,6 +81,24 @@ type Postgres struct {
 
 type RabbitMQ struct {
 	URL string
+}
+
+type Consumer struct {
+	Prefetch        int
+	ConnectTimeout  time.Duration
+	MaxMessageBytes int64
+}
+
+type ObjectStore struct {
+	Endpoint         string
+	Region           string
+	Bucket           string
+	AccessKey        string
+	SecretKey        string
+	PathStyle        bool
+	ConnectTimeout   time.Duration
+	ReadTimeout      time.Duration
+	MaxManifestBytes int64
 }
 
 type Investigation struct {
@@ -142,6 +168,36 @@ func LoadPublisher() (Config, error) {
 		Postgres:             postgres,
 		RabbitMQ:             rabbitMQ,
 		PublisherMetricsAddr: metricsAddr,
+	}, nil
+}
+
+func LoadConsumer() (Config, error) {
+	process, err := LoadProcess()
+	if err != nil {
+		return Config{}, err
+	}
+	postgres, err := loadPostgres()
+	if err != nil {
+		return Config{}, err
+	}
+	rabbitMQ, err := loadRabbitMQ()
+	if err != nil {
+		return Config{}, err
+	}
+	consumer, err := loadConsumer()
+	if err != nil {
+		return Config{}, err
+	}
+	objectStore, err := loadObjectStore()
+	if err != nil {
+		return Config{}, err
+	}
+	return Config{
+		Process:     process,
+		Postgres:    postgres,
+		RabbitMQ:    rabbitMQ,
+		Consumer:    consumer,
+		ObjectStore: objectStore,
 	}, nil
 }
 
@@ -300,6 +356,84 @@ func loadPostgres() (Postgres, error) {
 	}, nil
 }
 
+func loadConsumer() (Consumer, error) {
+	prefetch, err := positiveInt("RABBITMQ_PREFETCH_SOURCE", defaultRabbitMQPrefetch)
+	if err != nil {
+		return Consumer{}, err
+	}
+	if prefetch > 65535 {
+		return Consumer{}, fmt.Errorf("RABBITMQ_PREFETCH_SOURCE must not exceed 65535")
+	}
+	connectTimeout, err := positiveDuration("RABBITMQ_CONNECT_TIMEOUT", defaultRabbitMQConnectTimeout)
+	if err != nil {
+		return Consumer{}, err
+	}
+	maxMessageBytes, err := positiveInt64(
+		"SOURCE_RESULT_TERMINAL_MAX_BYTES", defaultResultMessageMaxBytes,
+	)
+	if err != nil {
+		return Consumer{}, err
+	}
+	return Consumer{
+		Prefetch:        prefetch,
+		ConnectTimeout:  connectTimeout,
+		MaxMessageBytes: maxMessageBytes,
+	}, nil
+}
+
+func loadObjectStore() (ObjectStore, error) {
+	endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
+	parsed, err := url.Parse(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Hostname() == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return ObjectStore{}, fmt.Errorf("S3_ENDPOINT must be an http or https endpoint URL")
+	}
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return ObjectStore{}, fmt.Errorf("S3_ENDPOINT must contain a valid port")
+		}
+	}
+	region := strings.TrimSpace(envOrDefault("S3_REGION", "local"))
+	bucket := strings.TrimSpace(os.Getenv("S3_BUCKET_ARTIFACTS"))
+	accessKey := strings.TrimSpace(os.Getenv("S3_ACCESS_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("S3_SECRET_KEY"))
+	if region == "" || bucket == "" || accessKey == "" || secretKey == "" {
+		return ObjectStore{}, fmt.Errorf("S3 region, bucket and credentials are required")
+	}
+	pathStyle, err := boolValue("S3_USE_PATH_STYLE", true)
+	if err != nil {
+		return ObjectStore{}, err
+	}
+	connectTimeout, err := positiveDuration("S3_CONNECT_TIMEOUT", defaultS3ConnectTimeout)
+	if err != nil {
+		return ObjectStore{}, err
+	}
+	readTimeout, err := positiveDuration("S3_READ_TIMEOUT", defaultS3ReadTimeout)
+	if err != nil {
+		return ObjectStore{}, err
+	}
+	maxManifestBytes, err := positiveInt64(
+		"SOURCE_RESULT_MANIFEST_MAX_BYTES", defaultResultManifestMaxBytes,
+	)
+	if err != nil {
+		return ObjectStore{}, err
+	}
+	return ObjectStore{
+		Endpoint:         endpoint,
+		Region:           region,
+		Bucket:           bucket,
+		AccessKey:        accessKey,
+		SecretKey:        secretKey,
+		PathStyle:        pathStyle,
+		ConnectTimeout:   connectTimeout,
+		ReadTimeout:      readTimeout,
+		MaxManifestBytes: maxManifestBytes,
+	}, nil
+}
+
 func parseLogLevel(raw string) (slog.Level, error) {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(raw)))); err != nil {
@@ -353,6 +487,24 @@ func positiveInt(key string, fallback int) (int, error) {
 	}
 	if value <= 0 {
 		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return value, nil
+}
+
+func positiveInt64(key string, fallback int64) (int64, error) {
+	raw := strings.TrimSpace(envOrDefault(key, strconv.FormatInt(fallback, 10)))
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 || value == int64(^uint64(0)>>1) {
+		return 0, fmt.Errorf("%s must be a positive 64-bit integer", key)
+	}
+	return value, nil
+}
+
+func boolValue(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(envOrDefault(key, strconv.FormatBool(fallback)))
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
 	}
 	return value, nil
 }
