@@ -26,7 +26,7 @@ func TestListSourcesUsesRegisteredFixture(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handler := handlers.New(pool, time.Second, config.Investigation{}, NewInvestigationStore(pool))
+	handler := handlers.New(pool, time.Second, config.Investigation{}, NewInvestigationStore(pool), nil)
 	server := router.NewRouter(logger, handler)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil))

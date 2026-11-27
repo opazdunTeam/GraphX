@@ -402,10 +402,19 @@ export interface components {
             stage: components["schemas"]["InvestigationStage"];
             state_version: number;
             progress: {
+                /** @description Число заданий в незавершённых состояниях */
+                active_jobs: number;
                 /** @description Число заданий, достигших конечного состояния */
                 terminal_jobs: number;
                 /** @description Число созданных к этому моменту заданий. Оно может увеличиваться при переходе к enrichment и не используется как точный процент. */
                 known_jobs: number;
+            };
+            /** @description Сводка уже полученных результатов, доступная во время работы */
+            partial_result: {
+                /** @description Число заданий, завершившихся с результатом */
+                succeeded_jobs: number;
+                /** @description Число источников хотя бы с одним успешным заданием */
+                sources_with_results: number;
             };
             sources: components["schemas"]["SourceStatus"][];
             /** @description Есть открытый review или действие по источнику */
@@ -426,6 +435,8 @@ export interface components {
             active_job_count: number;
             terminal_job_count: number;
             known_job_count: number;
+            /** @description Число заданий источника, уже завершившихся с результатом */
+            succeeded_job_count: number;
             /** @description Общее число начатых попыток по заданиям этого источника */
             attempt_count: number;
             error_code: string | null;
@@ -1067,7 +1078,9 @@ export interface operations {
                     "application/json": components["schemas"]["InvestigationStatus"];
                 };
             };
+            400: components["responses"]["ProblemResponse"];
             404: components["responses"]["ProblemResponse"];
+            500: components["responses"]["ProblemResponse"];
         };
     };
     cancelInvestigation: {

@@ -361,9 +361,9 @@ func run() error {
 		return fmt.Errorf("verify investigation creation migration: %w", err)
 	}
 
-	if err := executeGoose("up"); err != nil {
+	if err := verifyInvestigationStatusUpgrade(); err != nil {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
-		return fmt.Errorf("apply remaining database migrations: %w", err)
+		return err
 	}
 
 	testCommand := exec.Command(
@@ -448,6 +448,74 @@ func run() error {
 		return fmt.Errorf("remove integration database: %w", downErr)
 	}
 	return nil
+}
+
+func verifyInvestigationStatusUpgrade() error {
+	if err := executeGoose("up-to", "11"); err != nil {
+		return fmt.Errorf("apply migrations before investigation status: %w", err)
+	}
+	if err := executePSQL(`
+		insert into investigations (id, subject_type, subject_query, status, stage, state_version)
+		values ('10000000-0000-4000-8000-000000000022', 'person', '{"name":"Legacy status"}',
+		        'created', 'subject_discovery', 0);
+		update investigations set status = 'running' where id = '10000000-0000-4000-8000-000000000022';
+		insert into source_jobs (id, investigation_id, source_id, operation, purpose, request_hash, idempotency_key)
+		select job, '10000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000001',
+		       'collect', 'subject_discovery', job::text, job::text
+		from unnest(array[
+			'20000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000023',
+			'20000000-0000-4000-8000-000000000026'
+		]::uuid[]) as job;
+		insert into source_job_results (id, source_job_id, message_id, attempt_no, result_digest, applied)
+		values ('30000000-0000-4000-8000-000000000022', '20000000-0000-4000-8000-000000000022',
+		        '31000000-0000-4000-8000-000000000022', 1, repeat('b', 64), true),
+		       ('30000000-0000-4000-8000-000000000026', '20000000-0000-4000-8000-000000000026',
+		        '31000000-0000-4000-8000-000000000026', 1, repeat('c', 64), true);
+		update source_jobs set status = 'retry_wait', next_attempt_at = now() + interval '1 minute',
+		       last_error_code = 'SOURCE_TIMEOUT' where id = '20000000-0000-4000-8000-000000000022';
+		update source_jobs set status = 'pending', attempt_no = 2, next_attempt_at = null
+		where id = '20000000-0000-4000-8000-000000000022';
+		update source_jobs set status = 'queued', updated_at = now() + interval '2 minutes'
+		where id = '20000000-0000-4000-8000-000000000022';
+		update source_jobs set status = 'failed', last_error_code = 'SOURCE_ACCESS_DENIED',
+		       updated_at = now() + interval '1 minute'
+		where id = '20000000-0000-4000-8000-000000000023';
+		update source_jobs set status = 'action_required', last_error_code = 'SOURCE_ACTION_REQUIRED'
+		where id = '20000000-0000-4000-8000-000000000026';
+		update source_jobs set status = 'failed', last_error_code = 'SOURCE_ACCESS_DENIED',
+		       updated_at = now() + interval '3 minutes'
+		where id = '20000000-0000-4000-8000-000000000026';
+	`); err != nil {
+		return fmt.Errorf("seed legacy investigation status: %w", err)
+	}
+	if err := executeGoose("up"); err != nil {
+		return fmt.Errorf("apply remaining database migrations: %w", err)
+	}
+	return executePSQL(`
+		do $$
+		begin
+			if (select state_version from investigations where id = '10000000-0000-4000-8000-000000000022') <> 1
+				or not exists (
+					select 1 from source_jobs job
+					join source_job_results result on result.source_job_id = job.id
+					where job.id = '20000000-0000-4000-8000-000000000022'
+					  and job.last_error_at = result.received_at and job.last_error_at < job.updated_at
+				)
+				or not exists (
+					select 1 from source_jobs
+					where id = '20000000-0000-4000-8000-000000000023' and last_error_at = updated_at
+				)
+				or not exists (
+					select 1 from source_jobs job
+					join source_job_results result on result.source_job_id = job.id
+					where job.id = '20000000-0000-4000-8000-000000000026'
+					  and job.last_error_at = job.updated_at and job.last_error_at > result.received_at
+				) then
+				raise exception 'legacy status backfill is invalid';
+			end if;
+		end
+		$$
+	`)
 }
 
 func executePSQL(statement string) error {

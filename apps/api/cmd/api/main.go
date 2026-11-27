@@ -63,7 +63,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize investigation creator: %w", err)
 	}
-	handler := handlers.New(pool, cfg.Postgres.HealthTimeout, cfg.Investigation, investigationStore, investigationCreator)
+	handler := handlers.New(pool, cfg.Postgres.HealthTimeout, cfg.Investigation, investigationStore, investigationStore, investigationCreator)
 	server := router.NewServer(cfg, logger, handler)
 
 	errCh := make(chan error, 1)

@@ -259,14 +259,6 @@ func (h *Handler) ListInvestigationReviews(
 	h.notImplemented(c)
 }
 
-func (h *Handler) GetInvestigationStatus(
-	c *gin.Context,
-	_ generated.InvestigationID,
-	_ generated.GetInvestigationStatusParams,
-) {
-	h.notImplemented(c)
-}
-
 func (h *Handler) GetInvestigationTimeline(
 	c *gin.Context,
 	_ generated.InvestigationID,

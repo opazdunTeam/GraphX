@@ -1,0 +1,35 @@
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "status": "running",
+  "stage": "subject_discovery",
+  "state_version": 1,
+  "progress": {
+    "active_jobs": 1,
+    "terminal_jobs": 1,
+    "known_jobs": 2
+  },
+  "partial_result": {
+    "succeeded_jobs": 1,
+    "sources_with_results": 1
+  },
+  "sources": [
+    {
+      "source_code": "fixture",
+      "status": "retry_wait",
+      "active_job_count": 1,
+      "terminal_job_count": 1,
+      "known_job_count": 2,
+      "succeeded_job_count": 1,
+      "attempt_count": 2,
+      "error_code": "SOURCE_TIMEOUT",
+      "error_detail": "The source did not respond in time.",
+      "next_attempt_at": "2026-11-28T12:01:00Z",
+      "updated_at": "2026-11-28T12:00:30Z"
+    }
+  ],
+  "requires_action": false,
+  "pending_review_count": 0,
+  "reviews_url": null,
+  "source_actions": [],
+  "updated_at": "2026-11-28T12:00:30Z"
+}

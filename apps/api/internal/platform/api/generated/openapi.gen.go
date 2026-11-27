@@ -865,9 +865,21 @@ type InvestigationState string
 
 // InvestigationStatus defines model for InvestigationStatus.
 type InvestigationStatus struct {
-	Id                 openapi_types.UUID `json:"id"`
-	PendingReviewCount int                `json:"pending_review_count"`
+	Id openapi_types.UUID `json:"id"`
+
+	// PartialResult Сводка уже полученных результатов, доступная во время работы
+	PartialResult struct {
+		// SourcesWithResults Число источников хотя бы с одним успешным заданием
+		SourcesWithResults int `json:"sources_with_results"`
+
+		// SucceededJobs Число заданий, завершившихся с результатом
+		SucceededJobs int `json:"succeeded_jobs"`
+	} `json:"partial_result"`
+	PendingReviewCount int `json:"pending_review_count"`
 	Progress           struct {
+		// ActiveJobs Число заданий в незавершённых состояниях
+		ActiveJobs int `json:"active_jobs"`
+
 		// KnownJobs Число созданных к этому моменту заданий. Оно может увеличиваться при переходе к enrichment и не используется как точный процент.
 		KnownJobs int `json:"known_jobs"`
 
@@ -1183,9 +1195,12 @@ type SourceStatus struct {
 	SourceCode    string     `json:"source_code"`
 
 	// Status Сводное состояние всех заданий источника в расследовании. Это не состояние отдельной строки source_jobs.
-	Status           SourceAggregateState `json:"status"`
-	TerminalJobCount int                  `json:"terminal_job_count"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	Status SourceAggregateState `json:"status"`
+
+	// SucceededJobCount Число заданий источника, уже завершившихся с результатом
+	SucceededJobCount int       `json:"succeeded_job_count"`
+	TerminalJobCount  int       `json:"terminal_job_count"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // SubjectInput Исходный субъект задаётся именем, идентификаторами либо обоими способами. Две явные формы сохраняют это правило в сгенерированных TypeScript-типах: объект с name может дополнительно содержать identifiers, а объект без name обязан содержать identifiers.

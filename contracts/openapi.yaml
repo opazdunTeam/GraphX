@@ -144,7 +144,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/InvestigationStatus"
+        "400":
+          $ref: "#/components/responses/ProblemResponse"
         "404":
+          $ref: "#/components/responses/ProblemResponse"
+        "500":
           $ref: "#/components/responses/ProblemResponse"
   /investigations/{investigation_id}/cancel:
     post:
@@ -746,6 +750,7 @@ components:
         - stage
         - state_version
         - progress
+        - partial_result
         - sources
         - requires_action
         - pending_review_count
@@ -766,8 +771,12 @@ components:
         progress:
           type: object
           additionalProperties: false
-          required: [terminal_jobs, known_jobs]
+          required: [active_jobs, terminal_jobs, known_jobs]
           properties:
+            active_jobs:
+              type: integer
+              minimum: 0
+              description: Число заданий в незавершённых состояниях
             terminal_jobs:
               type: integer
               minimum: 0
@@ -778,6 +787,20 @@ components:
               description: >-
                 Число созданных к этому моменту заданий. Оно может увеличиваться
                 при переходе к enrichment и не используется как точный процент.
+        partial_result:
+          type: object
+          additionalProperties: false
+          required: [succeeded_jobs, sources_with_results]
+          description: Сводка уже полученных результатов, доступная во время работы
+          properties:
+            succeeded_jobs:
+              type: integer
+              minimum: 0
+              description: Число заданий, завершившихся с результатом
+            sources_with_results:
+              type: integer
+              minimum: 0
+              description: Число источников хотя бы с одним успешным заданием
         sources:
           type: array
           items:
@@ -808,6 +831,7 @@ components:
         - active_job_count
         - terminal_job_count
         - known_job_count
+        - succeeded_job_count
         - attempt_count
         - error_code
         - error_detail
@@ -828,6 +852,10 @@ components:
         known_job_count:
           type: integer
           minimum: 0
+        succeeded_job_count:
+          type: integer
+          minimum: 0
+          description: Число заданий источника, уже завершившихся с результатом
         attempt_count:
           type: integer
           minimum: 0

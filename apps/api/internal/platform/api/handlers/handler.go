@@ -25,6 +25,7 @@ type Handler struct {
 	investigation    config.Investigation
 	create           investigations.CreateUseCase
 	sources          sourceCatalogReader
+	status           investigations.StatusReader
 }
 
 func New(
@@ -32,6 +33,7 @@ func New(
 	readinessTimeout time.Duration,
 	investigation config.Investigation,
 	sources sourceCatalogReader,
+	status investigations.StatusReader,
 	creators ...investigations.CreateUseCase,
 ) *Handler {
 	handler := &Handler{
@@ -39,6 +41,7 @@ func New(
 		readinessTimeout: readinessTimeout,
 		investigation:    investigation,
 		sources:          sources,
+		status:           status,
 	}
 	if len(creators) > 0 {
 		handler.create = creators[0]

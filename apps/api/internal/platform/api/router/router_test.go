@@ -30,7 +30,7 @@ func testRouter(checker *readinessStub) http.Handler {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := handlers.New(checker, 50*time.Millisecond, config.Investigation{
 		DefaultDepth: 1, MaxDepth: 2, DefaultEntityLimit: 50, MaxEntityLimit: 100,
-	}, nil)
+	}, nil, nil)
 	return NewRouter(logger, handler)
 }
 
@@ -118,7 +118,6 @@ func TestRoutes(t *testing.T) {
 			body:   `{"subject":{"type":"person","name":"Ada"}}`,
 		},
 		{method: http.MethodGet, path: "/api/v1/investigations/" + id},
-		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/status"},
 		{method: http.MethodPost, path: "/api/v1/investigations/" + id + "/cancel"},
 		{method: http.MethodGet, path: "/api/v1/sources"},
 		{method: http.MethodGet, path: "/api/v1/investigations/" + id + "/reviews"},
