@@ -38,6 +38,7 @@ type ResultManifestReader interface {
 }
 
 type ResultStore interface {
+	CheckExistingSourceResult(context.Context, string, SourceResultCommand) (ResultApplyOutcome, error)
 	ApplySourceResult(context.Context, string, SourceResultCommand) (ResultApplyOutcome, error)
 }
 
@@ -237,6 +238,31 @@ func (c *ResultConsumer) handleCompleted(
 	if err := ValidateSourceResult(envelope.Payload, rawPayload); err != nil {
 		return ResultConsumerOutcome{}, NewPermanentResultError(fmt.Errorf("validate completed result: %w", err))
 	}
+	status, err := completedResultStatus(envelope.Payload.Outcome)
+	if err != nil {
+		return ResultConsumerOutcome{}, NewPermanentResultError(err)
+	}
+	command := SourceResultCommand{
+		ID:             uuid.NewString(),
+		MessageID:      envelope.MessageID,
+		CorrelationID:  envelope.CorrelationID,
+		JobID:          envelope.Payload.JobID,
+		AttemptNo:      envelope.Payload.AttemptNo,
+		Digest:         envelope.Payload.Digest,
+		AdapterVersion: envelope.Payload.AdapterVersion,
+		Status:         status,
+	}
+	if envelope.Payload.Manifest != nil {
+		existing, err := c.store.CheckExistingSourceResult(ctx, c.name, command)
+		if err != nil {
+			return ResultConsumerOutcome{}, err
+		}
+		if existing.Duplicate {
+			return consumerOutcome(command, existing), nil
+		}
+	} else if err := normalizeInlineContent(rawPayload, &envelope.Payload); err != nil {
+		return ResultConsumerOutcome{}, NewPermanentResultError(fmt.Errorf("normalize inline result: %w", err))
+	}
 
 	manifest, err := c.loadManifest(ctx, envelope.Payload)
 	if err != nil {
@@ -269,27 +295,13 @@ func (c *ResultConsumer) handleCompleted(
 			fmt.Errorf("build processing inputs: %w", err),
 		)
 	}
-	status, err := completedResultStatus(envelope.Payload.Outcome)
-	if err != nil {
-		return ResultConsumerOutcome{}, NewPermanentResultError(err)
-	}
-	artifacts := append([]ArtifactReference(nil), envelope.Payload.Artifacts...)
+	command.Artifacts = envelope.Payload.Artifacts
 	if envelope.Payload.Manifest != nil {
-		artifacts = append(artifacts, *envelope.Payload.Manifest)
+		command.Artifacts = append(command.Artifacts, *envelope.Payload.Manifest)
 	}
-	return c.apply(ctx, envelope.MessageID, envelope.CorrelationID, SourceResultCommand{
-		ID:             uuid.NewString(),
-		MessageID:      envelope.MessageID,
-		CorrelationID:  envelope.CorrelationID,
-		JobID:          envelope.Payload.JobID,
-		AttemptNo:      envelope.Payload.AttemptNo,
-		Digest:         envelope.Payload.Digest,
-		AdapterVersion: envelope.Payload.AdapterVersion,
-		Status:         status,
-		Artifacts:      artifacts,
-		ProcessingRuns: runs,
-		Claims:         resultClaims(envelope.Payload, manifestModel),
-	})
+	command.ProcessingRuns = runs
+	command.Claims = resultClaims(envelope.Payload, manifestModel)
+	return c.apply(ctx, command)
 }
 
 func (c *ResultConsumer) handleFailed(
@@ -320,6 +332,8 @@ func (c *ResultConsumer) handleFailed(
 	messageText := envelope.Payload.Error.Message
 	if envelope.Payload.Error.Classification == "bug" {
 		messageText = "source adapter failed unexpectedly"
+	} else if invalidPersistedText(messageText) {
+		messageText = "source adapter failed"
 	}
 	command := SourceResultCommand{
 		ID:             uuid.NewString(),
@@ -337,7 +351,7 @@ func (c *ResultConsumer) handleFailed(
 	if status == ResultStatusRetryWait {
 		command.NextAttemptAt = c.now().Add(c.retryDelay(envelope.Payload.AttemptNo, envelope.Payload.Error.RetryAfterSeconds))
 	}
-	return c.apply(ctx, envelope.MessageID, envelope.CorrelationID, command)
+	return c.apply(ctx, command)
 }
 
 func (c *ResultConsumer) loadManifest(
@@ -365,29 +379,48 @@ func (c *ResultConsumer) loadManifest(
 
 func (c *ResultConsumer) apply(
 	ctx context.Context,
-	messageID, correlationID string,
 	command SourceResultCommand,
 ) (ResultConsumerOutcome, error) {
 	applied, err := c.store.ApplySourceResult(ctx, c.name, command)
 	if err != nil {
 		return ResultConsumerOutcome{}, err
 	}
+	return consumerOutcome(command, applied), nil
+}
+
+func consumerOutcome(command SourceResultCommand, applied ResultApplyOutcome) ResultConsumerOutcome {
 	return ResultConsumerOutcome{
-		MessageID:     messageID,
-		CorrelationID: correlationID,
+		MessageID:     command.MessageID,
+		CorrelationID: command.CorrelationID,
 		JobID:         command.JobID,
 		AttemptNo:     command.AttemptNo,
 		Status:        applied.Status,
 		Applied:       applied.Applied,
 		Duplicate:     applied.Duplicate,
 		IgnoredReason: applied.IgnoredReason,
-	}, nil
+	}
+}
+
+func normalizeInlineContent(rawPayload []byte, result *SourceResult) error {
+	canonical, err := contractjson.Canonicalize(rawPayload)
+	if err != nil {
+		return err
+	}
+	var content struct {
+		Records []SourceRecord `json:"records"`
+		Claims  []Claim        `json:"claims"`
+	}
+	if err := decodeJSON(canonical, &content); err != nil {
+		return err
+	}
+	result.Records = content.Records
+	result.Claims = content.Claims
+	return nil
 }
 
 type resultEnvelope[T any] struct {
 	MessageID     string `json:"message_id"`
 	Type          string `json:"type"`
-	SchemaVersion int    `json:"schema_version"`
 	CorrelationID string `json:"correlation_id"`
 	Payload       T      `json:"payload"`
 }
@@ -419,14 +452,16 @@ func validateDeliveryMetadata(
 	if messageType != expectedType {
 		return fmt.Errorf("unexpected result message type %q", messageType)
 	}
-	if metadata.MessageID == "" || metadata.MessageID != messageID {
+	envelopeID, err := uuid.Parse(messageID)
+	if err != nil {
+		return errors.New("result message_id is not a UUID")
+	}
+	deliveryID, err := uuid.Parse(metadata.MessageID)
+	if err != nil || deliveryID != envelopeID {
 		return errors.New("RabbitMQ message_id does not match the result envelope")
 	}
 	if metadata.Type != messageType || metadata.RoutingKey != messageType {
 		return errors.New("RabbitMQ type or routing key does not match the result envelope")
-	}
-	if _, err := uuid.Parse(messageID); err != nil {
-		return errors.New("result message_id is not a UUID")
 	}
 	return nil
 }
@@ -436,9 +471,8 @@ func validateFailedResult(result SourceCollectFailedPayload) error {
 		strings.ContainsRune(result.AdapterVersion, '\x00') {
 		return errors.New("failed result adapter_version is invalid")
 	}
-	if strings.TrimSpace(result.Error.Message) == "" ||
-		strings.ContainsRune(result.Error.Message, '\x00') {
-		return errors.New("failed result message is invalid")
+	if result.AttemptNo < 1 {
+		return errors.New("failed result attempt_no must be positive")
 	}
 	if err := ValidateArtifactRefs(result.Artifacts, result.JobID, result.AttemptNo); err != nil {
 		return err

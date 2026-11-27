@@ -14,6 +14,7 @@
 8. `008_outbox_leases.sql` - временная аренда outbox-сообщений для безопасной работы нескольких publishers;
 9. `009_investigation_creation.sql` - разделение raw и normalized subject и начальная версия состояния investigation.
 10. `010_outbox_payload_representation.sql` - защита текстового представления payload для стабильной повторной публикации.
+11. `011_source_result_inbox_receipt.sql` - связь delivery inbox с receipt результата попытки.
 
 Смысл таблиц и основные инварианты описаны в [модели данных](../docs/07-data-model.md). SQL определяет точную физическую схему, а ERD должна обновляться вместе с изменением состава таблиц и колонок.
 

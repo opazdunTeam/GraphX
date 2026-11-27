@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/ingestion"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -19,6 +20,8 @@ const (
 	CoreEventsQueue         = "core.events.q"
 	CoreEventsDeadLetter    = "core.events.dlq"
 	CoreEventsDeadLetterKey = "core.events.dlq"
+	resultRetryDelay        = time.Second
+	resultCloseTimeout      = time.Second
 )
 
 type SourceResultHandler interface {
@@ -69,23 +72,42 @@ func NewSourceResultConsumer(
 }
 
 func (c *SourceResultConsumer) Run(ctx context.Context) error {
+	setupCtx, cancelSetup := context.WithTimeout(ctx, c.connectTimeout)
+	defer cancelSetup()
+	var transport net.Conn
+	var stopSetup func() bool
+	defer func() {
+		if stopSetup != nil {
+			stopSetup()
+			_ = transport.Close()
+		}
+	}()
 	connection, err := amqp.DialConfig(c.url, amqp.Config{
 		Heartbeat: 10 * time.Second,
 		Locale:    "en_US",
 		Dial: func(network, address string) (net.Conn, error) {
-			return net.DialTimeout(network, address, c.connectTimeout)
+			dialer := net.Dialer{}
+			opened, err := dialer.DialContext(setupCtx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			transport = opened
+			stopSetup = context.AfterFunc(setupCtx, func() { _ = opened.Close() })
+			return opened, nil
 		},
 	})
 	if err != nil {
+		if setupCtx.Err() != nil {
+			return setupCtx.Err()
+		}
 		return fmt.Errorf("connect to RabbitMQ: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.CloseDeadline(time.Now().Add(resultCloseTimeout)) }()
 
 	channel, err := connection.Channel()
 	if err != nil {
 		return fmt.Errorf("open RabbitMQ consumer channel: %w", err)
 	}
-	defer channel.Close()
 
 	if err := channel.Qos(c.prefetch, 0, false); err != nil {
 		return fmt.Errorf("set RabbitMQ source result prefetch: %w", err)
@@ -123,6 +145,13 @@ func (c *SourceResultConsumer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("start RabbitMQ source result consumer: %w", err)
 	}
+	stopSetup()
+	if err := setupCtx.Err(); err != nil {
+		return err
+	}
+	cancelSetup()
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = transport.Close() })
+	defer stopOnCancel()
 
 	for {
 		select {
@@ -153,24 +182,28 @@ func (c *SourceResultConsumer) handleDelivery(ctx context.Context, delivery amqp
 			return nil
 		}
 		permanent := ingestion.IsPermanentResultError(err)
+		fields := make([]any, 0, 4)
+		if id, parseErr := uuid.Parse(delivery.MessageId); parseErr == nil {
+			fields = append(fields, "message_id", id.String())
+		}
 		if permanent {
-			c.logger.Warn(
-				"source result rejected and sent to dead-letter queue",
-				"message_id", delivery.MessageId,
-				"message_type", delivery.Type,
-				"routing_key", delivery.RoutingKey,
-				"reason_code", ingestion.PermanentResultErrorCode(err),
-			)
+			fields = append(fields, "reason_code", ingestion.PermanentResultErrorCode(err))
 		} else {
-			c.logger.Error(
-				"source result processing failed and will be retried",
-				"message_id", delivery.MessageId,
-				"message_type", delivery.Type,
-				"routing_key", delivery.RoutingKey,
-			)
+			timer := time.NewTimer(resultRetryDelay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-timer.C:
+			}
 		}
 		if nackErr := delivery.Nack(false, !permanent); nackErr != nil {
 			return fmt.Errorf("reject RabbitMQ source result delivery: %w", nackErr)
+		}
+		if permanent {
+			c.logger.Warn("source result rejected for dead-lettering", fields...)
+		} else {
+			c.logger.Error("source result processing failed and was requeued", fields...)
 		}
 		return nil
 	}

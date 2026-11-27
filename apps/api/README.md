@@ -122,7 +122,7 @@ make check-api
 - `internal/ingestion` проверяет переносимую семантику результата: локальные ссылки, счётчики, temporal-правила, JCS digest и соответствие manifest;
 - проверки актуальности попытки и состояния задания выполняются consumer/orchestration перед сохранением в PostgreSQL.
 
-Transport-модели, schema registry и переносимые semantic validators уже реализованы и проверяются общими fixtures. `cmd/publisher` подключён: он проверяет сохранённые команды по JSON Schema и публикует их с RabbitMQ confirm. Runtime-подключение consumer и object storage остаётся отдельным этапом.
+Transport-модели, schema registry и semantic validators проверяются общими fixtures. `cmd/publisher` сверяет сохранённые команды с JSON Schema и публикует их с RabbitMQ confirm. `cmd/consumer` сверяет исходные сообщения с JSON Schema, при необходимости читает manifest из S3/MinIO и применяет результат одной транзакцией.
 
 Go-структуры RabbitMQ и ingest не генерируются из JSON Schema в MVP. Сложные условия схем удобнее выразить в transport-моделях и доменном коде явно, а соответствие контролировать тестами на общих примерах из `contracts/examples`.
 

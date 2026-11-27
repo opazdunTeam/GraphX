@@ -84,7 +84,7 @@ func ValidateManifest(
 	if err := validateRawLocatorNumbers(storedBytes); err != nil {
 		return err
 	}
-	if result.JobID != manifest.JobID || result.AttemptNo != manifest.AttemptNo ||
+	if !strings.EqualFold(result.JobID, manifest.JobID) || result.AttemptNo != manifest.AttemptNo ||
 		result.RecordCount != manifest.RecordCount {
 		return errors.New("manifest metadata does not match completed result")
 	}
@@ -454,7 +454,7 @@ func BuildProcessingRunInputs(
 		if manifest == nil {
 			return nil, errors.New("manifest result requires manifest content")
 		}
-		if result.JobID != manifest.JobID || result.AttemptNo != manifest.AttemptNo ||
+		if !strings.EqualFold(result.JobID, manifest.JobID) || result.AttemptNo != manifest.AttemptNo ||
 			result.RecordCount != manifest.RecordCount {
 			return nil, errors.New("manifest metadata does not match completed result")
 		}
@@ -506,39 +506,59 @@ func BuildProcessingRunInputs(
 	return runs, nil
 }
 
-func validateArtifactRefs(artifacts []ArtifactReference) (map[string]struct{}, error) {
-	refs := make(map[string]struct{}, len(artifacts))
-	for _, artifact := range artifacts {
+func validateArtifactRefs(artifacts []ArtifactReference) (map[string]int, error) {
+	refs, _, err := orderArtifactRefs(artifacts)
+	return refs, err
+}
+
+func OrderArtifactRefs(artifacts []ArtifactReference) ([]ArtifactReference, error) {
+	_, ordered, err := orderArtifactRefs(artifacts)
+	return ordered, err
+}
+
+func orderArtifactRefs(artifacts []ArtifactReference) (map[string]int, []ArtifactReference, error) {
+	refs := make(map[string]int, len(artifacts))
+	for index, artifact := range artifacts {
 		if _, exists := refs[artifact.LocalRef]; exists {
-			return nil, fmt.Errorf("duplicate artifact local_ref %q", artifact.LocalRef)
+			return nil, nil, fmt.Errorf("duplicate artifact local_ref %q", artifact.LocalRef)
 		}
-		refs[artifact.LocalRef] = struct{}{}
+		refs[artifact.LocalRef] = index
 	}
-	parents := make(map[string]string)
-	for _, artifact := range artifacts {
-		if artifact.ParentLocalRef == nil {
-			continue
+	const (
+		visiting = iota + 1
+		ordered
+	)
+	state := make([]uint8, len(artifacts))
+	result := make([]ArtifactReference, 0, len(artifacts))
+	var visit func(int) error
+	visit = func(index int) error {
+		switch state[index] {
+		case ordered:
+			return nil
+		case visiting:
+			return errors.New("artifact parent references cannot contain a cycle")
 		}
-		if _, exists := refs[*artifact.ParentLocalRef]; !exists {
-			return nil, fmt.Errorf("artifact %q references unknown parent %q", artifact.LocalRef, *artifact.ParentLocalRef)
-		}
-		if artifact.LocalRef == *artifact.ParentLocalRef {
-			return nil, fmt.Errorf("artifact %q cannot be its own parent", artifact.LocalRef)
-		}
-		parents[artifact.LocalRef] = *artifact.ParentLocalRef
-	}
-	for localRef := range parents {
-		visited := map[string]struct{}{localRef: {}}
-		current, exists := parents[localRef]
-		for exists {
-			if _, duplicate := visited[current]; duplicate {
-				return nil, errors.New("artifact parent references cannot contain a cycle")
+		state[index] = visiting
+		artifact := artifacts[index]
+		if artifact.ParentLocalRef != nil {
+			parent, exists := refs[*artifact.ParentLocalRef]
+			if !exists {
+				return fmt.Errorf("artifact %q references unknown parent %q", artifact.LocalRef, *artifact.ParentLocalRef)
 			}
-			visited[current] = struct{}{}
-			current, exists = parents[current]
+			if err := visit(parent); err != nil {
+				return err
+			}
+		}
+		result = append(result, artifact)
+		state[index] = ordered
+		return nil
+	}
+	for index := range artifacts {
+		if err := visit(index); err != nil {
+			return nil, nil, err
 		}
 	}
-	return refs, nil
+	return refs, result, nil
 }
 
 func validateArtifactTransport(artifacts []ArtifactReference, jobID string, attemptNo int) error {
@@ -553,7 +573,7 @@ func validateArtifactTransport(artifacts []ArtifactReference, jobID string, atte
 			return fmt.Errorf("artifact %q has an invalid local_ref", artifact.LocalRef)
 		}
 		encodedRef := base64.RawURLEncoding.EncodeToString([]byte(artifact.LocalRef))
-		expectedKey := fmt.Sprintf("artifacts/v1/%s/%d/%s", jobID, attemptNo, encodedRef)
+		expectedKey := fmt.Sprintf("artifacts/v1/%s/%d/%s", strings.ToLower(jobID), attemptNo, encodedRef)
 		if artifact.ObjectKey != expectedKey || len(artifact.ObjectKey) > 1024 {
 			return fmt.Errorf("artifact %q has an invalid object_key", artifact.LocalRef)
 		}

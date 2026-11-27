@@ -361,9 +361,9 @@ func run() error {
 		return fmt.Errorf("verify investigation creation migration: %w", err)
 	}
 
-	if err := executeGoose("up-to", "10"); err != nil {
+	if err := executeGoose("up"); err != nil {
 		_ = execute("docker", append(composeArgs, "down", "-v")...)
-		return fmt.Errorf("apply outbox payload representation migration: %w", err)
+		return fmt.Errorf("apply remaining database migrations: %w", err)
 	}
 
 	testCommand := exec.Command(

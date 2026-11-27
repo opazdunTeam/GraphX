@@ -61,6 +61,7 @@ jobs:
         env:
           GOFLAGS: -mod=readonly
           RABBITMQ_URL: amqp://test_user:test_password@127.0.0.1:${{ job.services.rabbitmq.ports['5672'] }}/graphx_test
+          GRAPHX_RESULT_RABBITMQ_TEST_URL: amqp://test_user:test_password@127.0.0.1:${{ job.services.rabbitmq.ports['5672'] }}/graphx_test
         run: make test-race
 
       - name: Verify clean working tree

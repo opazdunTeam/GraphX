@@ -1,6 +1,7 @@
 package ingestion
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,13 +61,19 @@ func (s *manifestReaderStub) Read(
 }
 
 type resultStoreStub struct {
-	command ingestionResultCommand
-	outcome ResultApplyOutcome
-	err     error
-	calls   int
+	command    ingestionResultCommand
+	outcome    ResultApplyOutcome
+	err        error
+	calls      int
+	existing   ResultApplyOutcome
+	checkError error
 }
 
 type ingestionResultCommand = SourceResultCommand
+
+func (s *resultStoreStub) CheckExistingSourceResult(context.Context, string, SourceResultCommand) (ResultApplyOutcome, error) {
+	return s.existing, s.checkError
+}
 
 func (s *resultStoreStub) ApplySourceResult(
 	_ context.Context,
@@ -113,10 +120,31 @@ func TestResultConsumerAppliesCompletedPayload(t *testing.T) {
 	}
 }
 
+func TestResultConsumerUsesCanonicalInlineNumbers(t *testing.T) {
+	result := validNotFoundResult()
+	result.Outcome = "succeeded"
+	result.RecordCount = 1
+	result.Records = []SourceRecord{{
+		LocalRef: "record:1", ArtifactLocalRef: result.Artifacts[0].LocalRef,
+		RecordType: "person", SchemaVersion: "person/1",
+		RawData: map[string]any{"ratio": json.Number("1.0000000000000001")},
+	}}
+	store := &resultStoreStub{}
+	consumer := newResultConsumerForTest(t, resultValidatorStub{}, &manifestReaderStub{}, store, time.Now())
+	payload := sourceResultPayload(t, &result)
+	body := resultEnvelopeBytes(t, testResultMessageID, SourceCollectCompletedType, payload)
+	if _, err := consumer.Handle(t.Context(), deliveryMetadata(SourceCollectCompletedType), body); err != nil {
+		t.Fatal(err)
+	}
+	if ratio := store.command.ProcessingRuns[0].Records[0].RawData["ratio"]; ratio != json.Number("1") {
+		t.Fatalf("inline record ratio = %#v, want the numeric value represented by the digest", ratio)
+	}
+}
+
 func TestResultConsumerLoadsAndValidatesManifest(t *testing.T) {
 	now := time.Date(2026, time.November, 20, 0, 0, 0, 0, time.UTC)
 	manifestBody := []byte(fmt.Sprintf(
-		`{"schema_version":1,"job_id":%q,"attempt_no":1,"record_count":1,"records":[{"local_ref":"record:1","artifact_local_ref":"artifact:raw:1","record_type":"person","external_id":null,"schema_version":"person/1","raw_data":{"name":"Example"}}],"claims":[]}`,
+		`{"schema_version":1,"job_id":%q,"attempt_no":1,"record_count":1,"records":[{"local_ref":"record:1","artifact_local_ref":"artifact:raw:1","record_type":"person","external_id":null,"schema_version":"person/1","raw_data":{"name":"Example","ratio":1.0000000000000001}}],"claims":[]}`,
 		testResultJobID,
 	))
 	manifestHash := sha256.Sum256(manifestBody)
@@ -154,6 +182,21 @@ func TestResultConsumerLoadsAndValidatesManifest(t *testing.T) {
 		len(store.command.ProcessingRuns[0].Records) != 1 {
 		t.Fatalf("manifest content was not prepared for storage: %#v", store.command)
 	}
+	ratio := store.command.ProcessingRuns[0].Records[0].RawData["ratio"]
+	if ratio != json.Number("1.0000000000000001") {
+		t.Fatalf("manifest record ratio = %#v", ratio)
+	}
+	store.existing = ResultApplyOutcome{Duplicate: true}
+	reader.err = errors.New("manifest store unavailable")
+	outcome, err := consumer.Handle(t.Context(), deliveryMetadata(SourceCollectCompletedType), body)
+	if err != nil || !outcome.Duplicate || reader.calls != 1 || store.calls != 1 {
+		t.Fatalf("duplicate manifest: outcome = %#v, reads = %d, writes = %d, error = %v", outcome, reader.calls, store.calls, err)
+	}
+	store.checkError = NewPermanentResultErrorWithCode("source_result_attempt_digest_conflict", nil)
+	_, err = consumer.Handle(t.Context(), deliveryMetadata(SourceCollectCompletedType), body)
+	if PermanentResultErrorCode(err) != "source_result_attempt_digest_conflict" || reader.calls != 1 || store.calls != 1 {
+		t.Fatalf("conflicting manifest: reads = %d, writes = %d, error = %v", reader.calls, store.calls, err)
+	}
 }
 
 func TestResultConsumerComputesFailedDigestAndRetryDeadline(t *testing.T) {
@@ -174,6 +217,9 @@ func TestResultConsumerComputesFailedDigestAndRetryDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload = bytes.Replace(payload, []byte(`"attempt_no":1`), []byte(`"attempt_no":1e0`), 1)
+	payload = bytes.Replace(payload, []byte(`"retry_after_seconds":60`), []byte(`"retry_after_seconds":6e1`), 1)
+	payload = bytes.Replace(payload, []byte(`"message":"slow down"`), []byte(`"message":"\u0000"`), 1)
 	body := resultEnvelopeBytes(t, testResultMessageID, SourceCollectFailedType, payload)
 	store := &resultStoreStub{outcome: ResultApplyOutcome{Applied: true, Status: ResultStatusRetryWait}}
 	consumer := newResultConsumerForTest(t, resultValidatorStub{}, &manifestReaderStub{}, store, now)
@@ -191,6 +237,9 @@ func TestResultConsumerComputesFailedDigestAndRetryDeadline(t *testing.T) {
 	if store.command.Status != ResultStatusRetryWait ||
 		!store.command.NextAttemptAt.Equal(now.Add(60*time.Second)) {
 		t.Fatalf("retry deadline = %s status %s", store.command.NextAttemptAt, store.command.Status)
+	}
+	if store.command.ErrorMessage != "source adapter failed" {
+		t.Fatalf("persisted failure message = %q", store.command.ErrorMessage)
 	}
 }
 

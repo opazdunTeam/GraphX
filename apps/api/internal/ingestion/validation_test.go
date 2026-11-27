@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func repositoryRoot(t *testing.T) string {
@@ -114,6 +115,30 @@ func TestResultRecordCountRejectsInexactTokens(t *testing.T) {
 				t.Fatal("expected inexact manifest record_count to be rejected")
 			}
 		})
+	}
+}
+
+func TestResultManifestDecodesEquivalentIntegerAndTimestampForms(t *testing.T) {
+	raw := []byte(`{
+		"schema_version":1e0,"attempt_no":1.0,"record_count":0,
+		"claims":[{"snapshot_at":"2026-11-20t12:30:00z","raw_value":1.0000000000000001}]
+	}`)
+	var manifest SourceResultManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := manifest.Claims[0].SnapshotAt
+	if manifest.SchemaVersion != 1 || manifest.AttemptNo != 1 || snapshot == nil ||
+		snapshot.Format(time.RFC3339) != "2026-11-20T12:30:00Z" ||
+		manifest.Claims[0].RawValue != json.Number("1.0000000000000001") {
+		t.Fatalf("unexpected decoded manifest: %+v", manifest)
+	}
+	var artifact ArtifactReference
+	if err := json.Unmarshal([]byte(`{"byte_size":12e1,"retrieved_at":"2026-11-20t12:30:00z"}`), &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ByteSize != 120 || !artifact.RetrievedAt.Equal(*snapshot) {
+		t.Fatalf("unexpected decoded artifact: %+v", artifact)
 	}
 }
 

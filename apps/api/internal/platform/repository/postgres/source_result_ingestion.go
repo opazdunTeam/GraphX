@@ -15,10 +15,29 @@ import (
 	"github.com/opazdunTeam/GraphX/apps/api/internal/orchestration"
 )
 
+const sourceResultTransactionTimeout = 30 * time.Second
+
 func (s *Store) ApplySourceResult(
 	ctx context.Context,
 	consumerName string,
 	result ingestion.SourceResultCommand,
+) (ingestion.ResultApplyOutcome, error) {
+	return s.applySourceResult(ctx, consumerName, result, false)
+}
+
+func (s *Store) CheckExistingSourceResult(
+	ctx context.Context,
+	consumerName string,
+	result ingestion.SourceResultCommand,
+) (ingestion.ResultApplyOutcome, error) {
+	return s.applySourceResult(ctx, consumerName, result, true)
+}
+
+func (s *Store) applySourceResult(
+	ctx context.Context,
+	consumerName string,
+	result ingestion.SourceResultCommand,
+	existingOnly bool,
 ) (ingestion.ResultApplyOutcome, error) {
 	if s.pool == nil {
 		return ingestion.ResultApplyOutcome{}, errors.New("source result ingestion requires a pool-backed store")
@@ -26,24 +45,11 @@ func (s *Store) ApplySourceResult(
 	if err := validateSourceResultCommand(consumerName, result); err != nil {
 		return ingestion.ResultApplyOutcome{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, sourceResultTransactionTimeout)
+	defer cancel()
 
 	var outcome ingestion.ResultApplyOutcome
 	err := s.WithinTransaction(ctx, func(txStore *Store) error {
-		var inserted bool
-		err := txStore.db.QueryRow(ctx, `
-			insert into consumed_messages (consumer_name, message_id)
-			values ($1, $2)
-			on conflict (consumer_name, message_id) do nothing
-			returning true
-		`, consumerName, result.MessageID).Scan(&inserted)
-		if errors.Is(err, pgx.ErrNoRows) {
-			outcome.Duplicate = true
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("register source result inbox message: %w", err)
-		}
-
 		var jobStatus orchestration.Status
 		var currentAttempt, maxAttempts int
 		var investigationID, investigationStatus, sourceID string
@@ -68,7 +74,7 @@ func (s *Store) ApplySourceResult(
 		`, investigationID).Scan(&investigationStatus); err != nil {
 			return fmt.Errorf("lock source result investigation: %w", err)
 		}
-		if result.CorrelationID != investigationID {
+		if !strings.EqualFold(result.CorrelationID, investigationID) {
 			return ingestion.NewPermanentResultError(errors.New("result correlation_id does not match the source job"))
 		}
 		if result.AttemptNo > currentAttempt {
@@ -77,12 +83,12 @@ func (s *Store) ApplySourceResult(
 			)
 		}
 
-		var existingDigest string
-		err = txStore.db.QueryRow(ctx, `
-			select result_digest
+		var existingID, existingDigest string
+		err := txStore.db.QueryRow(ctx, `
+			select id, result_digest
 			from source_job_results
 			where source_job_id = $1 and attempt_no = $2
-		`, result.JobID, result.AttemptNo).Scan(&existingDigest)
+		`, result.JobID, result.AttemptNo).Scan(&existingID, &existingDigest)
 		switch {
 		case err == nil:
 			if existingDigest != result.Digest {
@@ -91,12 +97,17 @@ func (s *Store) ApplySourceResult(
 					errors.New("conflicting result digest for an already accepted attempt"),
 				)
 			}
+			if err := txStore.registerSourceResultDelivery(ctx, consumerName, result.MessageID, existingID, true); err != nil {
+				return err
+			}
 			outcome.Duplicate = true
 			return nil
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("read existing source job result: %w", err)
 		}
-
+		if existingOnly {
+			return nil
+		}
 		ignoredReason := ""
 		switch {
 		case result.AttemptNo < currentAttempt:
@@ -129,17 +140,22 @@ func (s *Store) ApplySourceResult(
 		`, result.ID, result.JobID, result.MessageID, result.AttemptNo, result.Digest,
 			applied, ignoredReasonValue); err != nil {
 			var pgError *pgconn.PgError
-			if errors.As(err, &pgError) && pgError.Code == "23505" {
-				return ingestion.NewPermanentResultError(
+			if errors.As(err, &pgError) && pgError.ConstraintName == "source_job_results_message_id_key" {
+				return ingestion.NewPermanentResultErrorWithCode(
+					"source_result_message_id_conflict",
 					errors.New("result message conflicts with an existing producer identity"),
 				)
 			}
 			return fmt.Errorf("insert source job result receipt: %w", err)
 		}
+		if err := txStore.registerSourceResultDelivery(ctx, consumerName, result.MessageID, result.ID, false); err != nil {
+			return err
+		}
 
-		if err := txStore.insertSourceResultArtifacts(
+		artifactIDs, err := txStore.insertSourceResultArtifacts(
 			ctx, result.ID, sourceID, result.AdapterVersion, result.Artifacts,
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
 		outcome.IgnoredReason = ignoredReason
@@ -147,16 +163,13 @@ func (s *Store) ApplySourceResult(
 			return nil
 		}
 		if err := txStore.insertSourceResultProcessing(
-			ctx, result.ID, result.Artifacts, result.ProcessingRuns, result.Claims,
+			ctx, result.ID, artifactIDs, result.ProcessingRuns, result.Claims,
 		); err != nil {
 			return err
 		}
 
 		switch actualStatus {
 		case ingestion.ResultStatusRetryWait:
-			if result.NextAttemptAt.IsZero() {
-				return errors.New("retry_wait result requires next_attempt_at")
-			}
 			if err := txStore.ScheduleRetry(
 				ctx, result.JobID, result.NextAttemptAt, result.ErrorCode, result.ErrorMessage,
 			); err != nil {
@@ -179,7 +192,47 @@ func (s *Store) ApplySourceResult(
 		outcome.Status = actualStatus
 		return nil
 	})
-	return outcome, err
+	if err != nil {
+		return ingestion.ResultApplyOutcome{}, err
+	}
+	return outcome, nil
+}
+
+func (s *Store) registerSourceResultDelivery(
+	ctx context.Context,
+	consumerName, messageID, resultID string,
+	existingResult bool,
+) error {
+	tag, err := s.db.Exec(ctx, `
+		insert into consumed_messages (consumer_name, message_id, source_job_result_id)
+		values ($1, $2, $3)
+		on conflict (consumer_name, message_id) do nothing
+	`, consumerName, messageID, resultID)
+	if err != nil {
+		return fmt.Errorf("register source result inbox message: %w", err)
+	}
+	if tag.RowsAffected() != 0 {
+		return nil
+	}
+
+	if existingResult {
+		var matches bool
+		if err := s.db.QueryRow(ctx, `
+			select coalesce(inbox.source_job_result_id, receipt.id, $3::uuid) = $3::uuid
+			from consumed_messages inbox
+			left join source_job_results receipt on receipt.message_id = inbox.message_id
+			where inbox.consumer_name = $1 and inbox.message_id = $2
+		`, consumerName, messageID, resultID).Scan(&matches); err != nil {
+			return fmt.Errorf("check source result inbox identity: %w", err)
+		}
+		if matches {
+			return nil
+		}
+	}
+	return ingestion.NewPermanentResultErrorWithCode(
+		"source_result_message_id_conflict",
+		errors.New("result message_id was already used for a different result"),
+	)
 }
 
 func validateSourceResultCommand(consumerName string, result ingestion.SourceResultCommand) error {
@@ -220,27 +273,23 @@ func (s *Store) insertSourceResultArtifacts(
 	ctx context.Context,
 	resultID, sourceID, adapterVersion string,
 	artifacts []ingestion.ArtifactReference,
-) error {
-	ordered, err := orderSourceResultArtifacts(artifacts)
+) (map[string]string, error) {
+	ordered, err := ingestion.OrderArtifactRefs(artifacts)
 	if err != nil {
-		return err
+		return nil, ingestion.NewPermanentResultError(err)
 	}
 	artifactIDs := make(map[string]string, len(ordered))
 	for _, artifact := range ordered {
 		metadata, err := json.Marshal(artifact.HTTPMetadata)
 		if err != nil {
-			return fmt.Errorf("encode artifact HTTP metadata: %w", err)
+			return nil, fmt.Errorf("encode artifact HTTP metadata: %w", err)
 		}
 		id := uuid.NewString()
 		var parentID any
 		if artifact.ParentLocalRef != nil {
-			resolvedParentID, exists := artifactIDs[*artifact.ParentLocalRef]
-			if !exists {
-				return errors.New("artifact parent was not inserted before its child")
-			}
-			parentID = resolvedParentID
+			parentID = artifactIDs[*artifact.ParentLocalRef]
 		}
-		if _, err := s.db.Exec(ctx, `
+		tag, err := s.db.Exec(ctx, `
 			insert into artifacts (
 				id, source_id, kind, media_type, object_key, source_uri,
 				sha256, byte_size, published_at, retrieved_at, http_metadata,
@@ -250,87 +299,55 @@ func (s *Store) insertSourceResultArtifacts(
 				$7, $8, $9, $10, $11::jsonb,
 				$12, $13, $14
 			)
+			on conflict (object_key) do nothing
 		`, id, sourceID, artifact.Kind, artifact.MediaType, artifact.ObjectKey,
 			artifact.SourceURI, artifact.SHA256, artifact.ByteSize, artifact.PublishedAt,
-			artifact.RetrievedAt, string(metadata), adapterVersion, artifact.OriginalFilename, parentID); err != nil {
-			return fmt.Errorf("insert source result artifact: %w", err)
+			artifact.RetrievedAt, string(metadata), adapterVersion, artifact.OriginalFilename, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("insert source result artifact: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			err := s.db.QueryRow(ctx, `
+				select id from artifacts
+				where object_key = $1
+				  and (source_id, kind, media_type, source_uri, sha256, byte_size, published_at,
+				       retrieved_at, http_metadata, adapter_version, original_filename, parent_artifact_id)
+				      is not distinct from
+				      ($2::uuid, $3::text, $4::text, $5::text, $6::text, $7::bigint, $8::timestamptz,
+				       $9::timestamptz, $10::jsonb, $11::text, $12::text, $13::uuid)
+			`, artifact.ObjectKey, sourceID, artifact.Kind, artifact.MediaType, artifact.SourceURI,
+				artifact.SHA256, artifact.ByteSize, artifact.PublishedAt, artifact.RetrievedAt, string(metadata),
+				adapterVersion, artifact.OriginalFilename, parentID).Scan(&id)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ingestion.NewPermanentResultErrorWithCode(
+					"source_result_artifact_key_conflict", errors.New("registered artifact metadata does not match the result"),
+				)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read existing source result artifact: %w", err)
+			}
 		}
 		artifactIDs[artifact.LocalRef] = id
 	}
 	for _, artifact := range artifacts {
-		artifactID, exists := artifactIDs[artifact.LocalRef]
-		if !exists {
-			return errors.New("source result artifact was not inserted")
-		}
 		if _, err := s.db.Exec(ctx, `
 			insert into source_job_result_artifacts (
 				source_job_result_id, artifact_id, artifact_local_ref, role
 			) values ($1, $2, $3, $4)
-		`, resultID, artifactID, artifact.LocalRef, artifact.Kind); err != nil {
-			return fmt.Errorf("link source result artifact: %w", err)
+		`, resultID, artifactIDs[artifact.LocalRef], artifact.LocalRef, artifact.Kind); err != nil {
+			return nil, fmt.Errorf("link source result artifact: %w", err)
 		}
 	}
-	return nil
-}
-
-func orderSourceResultArtifacts(
-	artifacts []ingestion.ArtifactReference,
-) ([]ingestion.ArtifactReference, error) {
-	remaining := append([]ingestion.ArtifactReference(nil), artifacts...)
-	ordered := make([]ingestion.ArtifactReference, 0, len(artifacts))
-	inserted := make(map[string]struct{}, len(artifacts))
-	for len(remaining) > 0 {
-		next := make([]ingestion.ArtifactReference, 0, len(remaining))
-		progress := false
-		for _, artifact := range remaining {
-			if artifact.ParentLocalRef != nil {
-				if _, exists := inserted[*artifact.ParentLocalRef]; !exists {
-					next = append(next, artifact)
-					continue
-				}
-			}
-			ordered = append(ordered, artifact)
-			inserted[artifact.LocalRef] = struct{}{}
-			progress = true
-		}
-		if !progress {
-			return nil, errors.New("source result artifact parents cannot be resolved")
-		}
-		remaining = next
-	}
-	return ordered, nil
+	return artifactIDs, nil
 }
 
 func (s *Store) insertSourceResultProcessing(
 	ctx context.Context,
 	resultID string,
-	artifacts []ingestion.ArtifactReference,
+	artifactIDs map[string]string,
 	runs []ingestion.ProcessingRunInput,
 	claims []ingestion.Claim,
 ) error {
-	artifactIDs := make(map[string]string, len(artifacts))
-	rows, err := s.db.Query(ctx, `
-		select artifact_local_ref, artifact_id
-		from source_job_result_artifacts
-		where source_job_result_id = $1
-	`, resultID)
-	if err != nil {
-		return fmt.Errorf("read source result artifact links: %w", err)
-	}
-	for rows.Next() {
-		var localRef, artifactID string
-		if err := rows.Scan(&localRef, &artifactID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan source result artifact link: %w", err)
-		}
-		artifactIDs[localRef] = artifactID
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate source result artifact links: %w", err)
-	}
-	rows.Close()
-
 	recordIDs := make(map[string]string)
 	recordRuns := make(map[string]ingestion.ProcessingRunInput)
 	for _, run := range runs {
@@ -362,7 +379,7 @@ func (s *Store) insertSourceResultProcessing(
 				) values ($1, $2, $3, $4, $5, $6, $7::jsonb)
 			`, recordID, runID, record.LocalRef, record.ExternalID,
 				record.RecordType, record.SchemaVersion, string(rawData)); err != nil {
-				return fmt.Errorf("insert source result record: %w", err)
+				return sourceResultDataError("insert source result record", err)
 			}
 			recordIDs[record.LocalRef] = recordID
 			recordRuns[record.LocalRef] = run
@@ -429,10 +446,23 @@ func (s *Store) insertSourceResultProcessing(
 			validTo, claim.ValidFromPrecision, claim.ValidToPrecision,
 			claim.TemporalBasis, claim.SnapshotAt, string(evidenceLocator), claim.EvidenceExcerpt,
 			run.ParserVersion, run.MappingVersion, run.NormalizationVersion); err != nil {
-			return fmt.Errorf("insert source result claim: %w", err)
+			return sourceResultDataError("insert source result claim", err)
 		}
 	}
 	return nil
+}
+
+func sourceResultDataError(operation string, err error) error {
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) {
+		switch pgError.Code {
+		case "22003":
+			return ingestion.NewPermanentResultErrorWithCode("source_result_value_out_of_range", err)
+		case "54001":
+			return ingestion.NewPermanentResultErrorWithCode("source_result_value_too_complex", err)
+		}
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func dateValue(value *string) (any, error) {

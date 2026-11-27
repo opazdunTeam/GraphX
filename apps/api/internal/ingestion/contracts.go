@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,29 @@ type ArtifactReference struct {
 	ParentLocalRef   *string           `json:"parent_local_ref,omitempty"`
 }
 
+func (artifact *ArtifactReference) UnmarshalJSON(data []byte) error {
+	type alias ArtifactReference
+	decoded := struct {
+		ByteSize    json.RawMessage `json:"byte_size"`
+		RetrievedAt wireTimestamp   `json:"retrieved_at"`
+		PublishedAt *wireTimestamp  `json:"published_at"`
+		*alias
+	}{alias: (*alias)(artifact)}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.ByteSize != nil {
+		size, err := decodeExactJSONInteger(decoded.ByteSize)
+		if err != nil {
+			return fmt.Errorf("decode byte_size: %w", err)
+		}
+		artifact.ByteSize = size
+	}
+	artifact.RetrievedAt = time.Time(decoded.RetrievedAt)
+	artifact.PublishedAt = (*time.Time)(decoded.PublishedAt)
+	return nil
+}
+
 type Claim struct {
 	ClaimKind          string         `json:"claim_kind"`
 	SubjectLocalRef    string         `json:"subject_local_ref"`
@@ -39,6 +63,19 @@ type Claim struct {
 	SnapshotAt         *time.Time     `json:"snapshot_at"`
 	EvidenceLocator    map[string]any `json:"evidence_locator"`
 	EvidenceExcerpt    *string        `json:"evidence_excerpt"`
+}
+
+func (claim *Claim) UnmarshalJSON(data []byte) error {
+	type alias Claim
+	decoded := struct {
+		SnapshotAt *wireTimestamp `json:"snapshot_at"`
+		*alias
+	}{alias: (*alias)(claim)}
+	if err := decodeJSON(data, &decoded); err != nil {
+		return err
+	}
+	claim.SnapshotAt = (*time.Time)(decoded.SnapshotAt)
+	return nil
 }
 
 type SourceRecord struct {
@@ -70,17 +107,18 @@ type SourceResult struct {
 func (result *SourceResult) UnmarshalJSON(data []byte) error {
 	type sourceResultAlias SourceResult
 	decoded := struct {
-		RecordCount json.RawMessage `json:"record_count"`
+		AttemptNo   wireInt  `json:"attempt_no"`
+		RecordCount *wireInt `json:"record_count"`
 		*sourceResultAlias
 	}{sourceResultAlias: (*sourceResultAlias)(result)}
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	if err := decodeJSON(data, &decoded); err != nil {
 		return err
 	}
-	recordCount, err := decodeExactJSONInteger(decoded.RecordCount)
-	if err != nil {
-		return fmt.Errorf("decode record_count: %w", err)
+	if decoded.RecordCount == nil {
+		return fmt.Errorf("record_count is required")
 	}
-	result.RecordCount = recordCount
+	result.AttemptNo = int(decoded.AttemptNo)
+	result.RecordCount = int(*decoded.RecordCount)
 	return nil
 }
 
@@ -110,6 +148,19 @@ type SourceCollectError struct {
 	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
 }
 
+func (failure *SourceCollectError) UnmarshalJSON(data []byte) error {
+	type alias SourceCollectError
+	decoded := struct {
+		RetryAfterSeconds *wireInt `json:"retry_after_seconds"`
+		*alias
+	}{alias: (*alias)(failure)}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	failure.RetryAfterSeconds = (*int)(decoded.RetryAfterSeconds)
+	return nil
+}
+
 type SourceCollectFailedPayload struct {
 	JobID          string              `json:"job_id"`
 	AttemptNo      int                 `json:"attempt_no"`
@@ -118,24 +169,69 @@ type SourceCollectFailedPayload struct {
 	Error          SourceCollectError  `json:"error"`
 }
 
-func (manifest *SourceResultManifest) UnmarshalJSON(data []byte) error {
-	type sourceResultManifestAlias SourceResultManifest
+func (failure *SourceCollectFailedPayload) UnmarshalJSON(data []byte) error {
+	type alias SourceCollectFailedPayload
 	decoded := struct {
-		RecordCount json.RawMessage `json:"record_count"`
-		*sourceResultManifestAlias
-	}{sourceResultManifestAlias: (*sourceResultManifestAlias)(manifest)}
+		AttemptNo wireInt `json:"attempt_no"`
+		*alias
+	}{alias: (*alias)(failure)}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
-	recordCount, err := decodeExactJSONInteger(decoded.RecordCount)
-	if err != nil {
-		return fmt.Errorf("decode record_count: %w", err)
-	}
-	manifest.RecordCount = recordCount
+	failure.AttemptNo = int(decoded.AttemptNo)
 	return nil
 }
 
-func decodeExactJSONInteger(raw json.RawMessage) (int, error) {
+func (manifest *SourceResultManifest) UnmarshalJSON(data []byte) error {
+	type sourceResultManifestAlias SourceResultManifest
+	decoded := struct {
+		SchemaVersion wireInt  `json:"schema_version"`
+		AttemptNo     wireInt  `json:"attempt_no"`
+		RecordCount   *wireInt `json:"record_count"`
+		*sourceResultManifestAlias
+	}{sourceResultManifestAlias: (*sourceResultManifestAlias)(manifest)}
+	if err := decodeJSON(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.RecordCount == nil {
+		return fmt.Errorf("record_count is required")
+	}
+	manifest.SchemaVersion = int(decoded.SchemaVersion)
+	manifest.AttemptNo = int(decoded.AttemptNo)
+	manifest.RecordCount = int(*decoded.RecordCount)
+	return nil
+}
+
+type wireInt int
+
+func (integer *wireInt) UnmarshalJSON(raw []byte) error {
+	value, err := decodeExactJSONInteger(raw)
+	if err != nil {
+		return err
+	}
+	if int64(int(value)) != value {
+		return fmt.Errorf("value is outside the supported integer range")
+	}
+	*integer = wireInt(value)
+	return nil
+}
+
+type wireTimestamp time.Time
+
+func (timestamp *wireTimestamp) UnmarshalJSON(raw []byte) error {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return err
+	}
+	value, err := time.Parse(time.RFC3339Nano, strings.ToUpper(text))
+	if err != nil {
+		return err
+	}
+	*timestamp = wireTimestamp(value)
+	return nil
+}
+
+func decodeExactJSONInteger(raw json.RawMessage) (int64, error) {
 	const maximumSafeInteger int64 = 1<<53 - 1
 
 	var number json.Number
@@ -157,10 +253,5 @@ func decodeExactJSONInteger(raw json.RawMessage) (int, error) {
 	if !numerator.IsInt64() || numerator.Sign() < 0 || numerator.Cmp(big.NewInt(maximumSafeInteger)) > 0 {
 		return 0, fmt.Errorf("value is outside the non-negative safe integer range")
 	}
-	integer64 := numerator.Int64()
-	integer := int(integer64)
-	if int64(integer) != integer64 {
-		return 0, fmt.Errorf("value is outside the supported integer range")
-	}
-	return integer, nil
+	return numerator.Int64(), nil
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/ingestion"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/config"
@@ -17,6 +18,7 @@ import (
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/objectstore"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/rabbitmq"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/repository/postgres"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
@@ -85,16 +87,31 @@ func run() error {
 		"source result consumer started",
 		"prefetch", cfg.Consumer.Prefetch,
 	)
-	if err := broker.Run(ctx); err != nil {
+	for ctx.Err() == nil {
+		err := broker.Run(ctx)
 		if ctx.Err() != nil {
-			logger.Info("source result consumer stopping")
-			return nil
+			break
 		}
-		return fmt.Errorf("run source result consumer: %w", err)
+		if errors.Is(err, amqp.ErrSASL) {
+			return fmt.Errorf("authorize source result consumer: %w", err)
+		}
+		var protocolError *amqp.Error
+		if errors.As(err, &protocolError) {
+			if protocolError != amqp.ErrCredentials && protocolError != amqp.ErrVhost {
+				switch protocolError.Code {
+				case amqp.AccessRefused, amqp.PreconditionFailed, amqp.NotAllowed:
+					return fmt.Errorf("configure RabbitMQ result consumer: AMQP code %d", protocolError.Code)
+				}
+			}
+			logger.Warn("RabbitMQ result consumer disconnected, retrying", "amqp_code", protocolError.Code)
+		} else {
+			logger.Warn("RabbitMQ result consumer disconnected, retrying")
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
 	}
-	if ctx.Err() != nil {
-		logger.Info("source result consumer stopped")
-		return nil
-	}
-	return errors.New("source result consumer stopped unexpectedly")
+	logger.Info("source result consumer stopped")
+	return nil
 }

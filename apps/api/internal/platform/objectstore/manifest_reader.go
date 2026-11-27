@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -81,7 +82,7 @@ func (r *ManifestReader) Read(
 	objectKey string,
 	maxBytes int64,
 ) ([]byte, error) {
-	if strings.TrimSpace(objectKey) == "" || maxBytes < 1 {
+	if strings.TrimSpace(objectKey) == "" || maxBytes < 1 || maxBytes == math.MaxInt64 {
 		return nil, errors.New("object key and positive size limit are required")
 	}
 	readCtx, cancel := context.WithTimeout(ctx, r.readTimeout)
@@ -93,19 +94,13 @@ func (r *ManifestReader) Read(
 	}
 	defer object.Close()
 
-	info, err := object.Stat()
-	if err != nil {
-		if isMissingObject(err) {
-			return nil, ingestion.NewPermanentResultError(errors.New("result manifest object does not exist"))
-		}
-		return nil, fmt.Errorf("stat result manifest object: %w", err)
-	}
-	if info.Size < 0 || info.Size > maxBytes || maxBytes == int64(^uint64(0)>>1) {
-		return nil, ingestion.NewPermanentResultError(errors.New("result manifest exceeds configured size limit"))
-	}
-
 	data, err := io.ReadAll(io.LimitReader(object, maxBytes+1))
 	if err != nil {
+		if isMissingObject(err) {
+			return nil, ingestion.NewPermanentResultErrorWithCode(
+				"source_result_manifest_missing", errors.New("result manifest object does not exist"),
+			)
+		}
 		return nil, fmt.Errorf("read result manifest object: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
@@ -120,5 +115,5 @@ func (r *ManifestReader) Close() {
 
 func isMissingObject(err error) bool {
 	response := minio.ToErrorResponse(err)
-	return response.Code == "NoSuchKey" || response.Code == "NotFound" && response.StatusCode == http.StatusNotFound
+	return response.StatusCode == http.StatusNotFound && response.Code == "NoSuchKey" && response.RequestID != ""
 }
