@@ -36,20 +36,22 @@ func TestValidateOutboxMessage(t *testing.T) {
 }
 
 type testOutboxMessage struct {
-	id          string
-	messageType string
-	aggregateID string
-	operation   string
-	attemptNo   int
-	payloadJSON string
+	id              string
+	messageType     string
+	aggregateID     string
+	investigationID string
+	operation       string
+	attemptNo       int
+	payloadJSON     string
 }
 
-func (m testOutboxMessage) OutboxID() string    { return m.id }
-func (m testOutboxMessage) MessageType() string { return m.messageType }
-func (m testOutboxMessage) AggregateID() string { return m.aggregateID }
-func (m testOutboxMessage) Operation() string   { return m.operation }
-func (m testOutboxMessage) AttemptNo() int      { return m.attemptNo }
-func (m testOutboxMessage) JSONPayload() string { return m.payloadJSON }
+func (m testOutboxMessage) OutboxID() string        { return m.id }
+func (m testOutboxMessage) MessageType() string     { return m.messageType }
+func (m testOutboxMessage) AggregateID() string     { return m.aggregateID }
+func (m testOutboxMessage) InvestigationID() string { return m.investigationID }
+func (m testOutboxMessage) Operation() string       { return m.operation }
+func (m testOutboxMessage) AttemptNo() int          { return m.attemptNo }
+func (m testOutboxMessage) JSONPayload() string     { return m.payloadJSON }
 
 func sourceCollectRequestedOutboxMessage(
 	messageID, jobID, investigationID string,
@@ -77,11 +79,12 @@ func sourceCollectRequestedOutboxMessage(
 		}
 	}`, messageID, investigationID, messageID, jobID, attemptNo, investigationID)
 	return testOutboxMessage{
-		id:          messageID,
-		messageType: "source.collect.requested.v1",
-		aggregateID: jobID,
-		operation:   "search_subject",
-		attemptNo:   attemptNo,
-		payloadJSON: payloadJSON,
+		id:              messageID,
+		messageType:     "source.collect.requested.v1",
+		aggregateID:     jobID,
+		investigationID: investigationID,
+		operation:       "search_subject",
+		attemptNo:       attemptNo,
+		payloadJSON:     payloadJSON,
 	}
 }

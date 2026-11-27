@@ -12,6 +12,18 @@ import (
 	"github.com/opazdunTeam/GraphX/apps/api/internal/outbox"
 )
 
+func TestPublisherMetricsListenErrorDoesNotExposeAddress(t *testing.T) {
+	metrics, err := newPublisherMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const privateMarker = "private-metrics-marker"
+	_, _, err = startPublisherMetricsServer("127.0.0.1:"+privateMarker, metrics)
+	if err == nil || strings.Contains(err.Error(), privateMarker) {
+		t.Fatal("expected a safe metrics listen error")
+	}
+}
+
 func TestPublisherMetricsExposePublishOutcomesAndDurations(t *testing.T) {
 	metrics, err := newPublisherMetrics()
 	if err != nil {

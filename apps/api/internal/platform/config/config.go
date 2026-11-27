@@ -156,7 +156,7 @@ func LoadPublisher() (Config, error) {
 	}
 	_, port, err := net.SplitHostPort(metricsAddr)
 	if err != nil {
-		return Config{}, fmt.Errorf("PUBLISHER_METRICS_ADDR must be a valid host:port: %w", err)
+		return Config{}, fmt.Errorf("PUBLISHER_METRICS_ADDR must be a valid host:port")
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {

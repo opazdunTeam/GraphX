@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/orchestration"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/outbox"
 )
@@ -59,6 +60,16 @@ func TestSourceJobAndOutboxAreCreatedAtomically(t *testing.T) {
 		1,
 	)); err == nil {
 		t.Fatal("Create() accepted a source job operation that differs from its outbox command")
+	}
+	mismatchedInvestigationJob := mismatchedOperationJob
+	mismatchedInvestigationJob.Operation = job.Operation
+	if err := store.Create(ctx, mismatchedInvestigationJob, sourceCollectRequestedOutboxMessage(
+		"30000000-0000-4000-8000-000000000080",
+		mismatchedInvestigationJob.ID,
+		"10000000-0000-4000-8000-000000000099",
+		1,
+	)); err == nil {
+		t.Fatal("Create() accepted a source job investigation that differs from its outbox command")
 	}
 
 	rollbackInvestigationID := "10000000-0000-4000-8000-000000000078"
@@ -176,7 +187,7 @@ func TestOutboxExpiredLeaseRepeatsSameMessageAndRejectsOldOwner(t *testing.T) {
 	store := NewOutboxStore(pool)
 
 	messageID := "30000000-0000-4000-8000-000000000072"
-	payload := `{"message_id":"30000000-0000-4000-8000-000000000072","type":"source.collect.requested.v1","payload":{"job_id":"20000000-0000-4000-8000-000000000072","attempt_no":1}}`
+	payload := `{"message_id":"30000000-0000-4000-8000-000000000072","type":"source.collect.requested.v1","payload":{"job_id":"20000000-0000-4000-8000-000000000072","attempt_no":1,"query":{"name":"Иван"}}}`
 	if _, err := pool.Exec(ctx, `
 		insert into outbox_messages (
 			id, message_type, aggregate_type, aggregate_id, payload, created_at, available_at
@@ -199,11 +210,22 @@ func TestOutboxExpiredLeaseRepeatsSameMessageAndRejectsOldOwner(t *testing.T) {
 		t.Fatalf("expire outbox lease: %v", err)
 	}
 
-	second, err := store.Claim(ctx, time.Minute)
+	retryConfig, err := pgxpool.ParseConfig(testPostgresConfig().DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryConfig.ConnConfig.RuntimeParams["client_encoding"] = "LATIN1"
+	retryPool, err := pgxpool.NewWithConfig(ctx, retryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(retryPool.Close)
+	second, err := NewOutboxStore(retryPool).Claim(ctx, time.Minute)
 	if err != nil || second == nil {
 		t.Fatalf("second claim = %#v, error %v", second, err)
 	}
 	if first.ID != second.ID || string(first.Payload) != string(second.Payload) ||
+		!strings.Contains(string(second.Payload), "Иван") ||
 		first.LeaseToken == second.LeaseToken {
 		t.Fatalf("reclaimed message changed: first %#v second %#v", first, second)
 	}

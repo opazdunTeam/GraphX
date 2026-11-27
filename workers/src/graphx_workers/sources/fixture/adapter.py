@@ -29,7 +29,6 @@ from graphx_workers.sources.fixture.metadata import (
     PARSER_VERSION,
     RAW_ARTIFACT_LOCAL_REF,
     SUPPORTED_ENTITY_TYPE,
-    SUPPORTED_OPERATION,
 )
 from graphx_workers.sources.fixture.parser import FixtureFormatError, parse_fixture_response
 
@@ -86,10 +85,13 @@ class FixtureAdapter(SourceAdapter):
 
     @staticmethod
     def _validate_request(request: CollectRequest) -> None:
-        if request.operation != SUPPORTED_OPERATION or request.query.type != SUPPORTED_ENTITY_TYPE:
+        if (
+            request.operation not in ADAPTER_METADATA.supported_operations
+            or request.query.type != SUPPORTED_ENTITY_TYPE
+        ):
             raise PermanentAdapterError(
                 ErrorCode.SOURCE_UNSUPPORTED_OPERATION,
-                "fixture adapter supports only person search_subject requests",
+                "fixture adapter supports only person lookup requests",
             )
 
     @staticmethod

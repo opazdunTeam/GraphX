@@ -1089,12 +1089,16 @@ func TestMessagingAndIdempotencyHistoryGuards(t *testing.T) {
 		const outboxID = "30000000-0000-4000-8000-000000000031"
 		if _, err := tx.Exec(ctx, `
 			insert into outbox_messages (id, message_type, aggregate_type, aggregate_id, payload)
-			values ($1, 'source.collect.requested.v1', 'source_job', $2, '{"job":"test"}'::jsonb)
+			values ($1, 'source.collect.requested.v1', 'source_job', $2, '{"job":"test","attempt_no":1}'::jsonb)
 		`, outboxID, testJobID); err != nil {
 			t.Fatalf("insert outbox message: %v", err)
 		}
 		requireRejectedStatement(t, ctx, tx, "rewrite outbox payload", `
 			update outbox_messages set message_type = 'other', payload = '{"rewritten":true}'::jsonb
+			where id = $1
+		`, outboxID)
+		requireRejectedStatement(t, ctx, tx, "change outbox numeric representation before publication", `
+			update outbox_messages set payload = jsonb_set(payload, '{attempt_no}', '1.0'::jsonb)
 			where id = $1
 		`, outboxID)
 		if _, err := tx.Exec(ctx, `
@@ -1109,6 +1113,10 @@ func TestMessagingAndIdempotencyHistoryGuards(t *testing.T) {
 		}
 		requireRejectedStatement(t, ctx, tx, "rewrite published outbox message", `
 			update outbox_messages set publish_attempts = publish_attempts + 1 where id = $1
+		`, outboxID)
+		requireRejectedStatement(t, ctx, tx, "change outbox numeric representation after publication", `
+			update outbox_messages set payload = jsonb_set(payload, '{attempt_no}', '1.0'::jsonb)
+			where id = $1
 		`, outboxID)
 
 		if _, err := tx.Exec(ctx, `

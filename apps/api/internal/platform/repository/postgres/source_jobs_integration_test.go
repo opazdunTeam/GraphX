@@ -180,6 +180,9 @@ func TestStoreRetryRejectsMismatchedExpectedAttemptAtomically(t *testing.T) {
 			message.operation = "collect"
 			return message
 		}()},
+		{name: "different investigation", expectedAttempt: 2, message: sourceCollectRequestedOutboxMessage(
+			valid.id, jobID, "10000000-0000-4000-8000-000000000099", 2,
+		).(testOutboxMessage)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -551,7 +554,7 @@ func TestPreparedSourceCollectRequestStartsNewAttempt(t *testing.T) {
 		registry,
 		envelope,
 		rabbitmq.SourceCollectRequestedIdentity{
-			MessageID: messageID, JobID: jobID, AttemptNo: 2,
+			MessageID: messageID, JobID: jobID, InvestigationID: investigationID, AttemptNo: 2,
 		},
 	)
 	if err != nil {

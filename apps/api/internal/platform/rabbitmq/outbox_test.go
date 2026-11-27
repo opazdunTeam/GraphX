@@ -32,23 +32,42 @@ func TestSourceCollectOutboxFactoryProducesValidatedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareSourceCollect() error = %v", err)
 	}
-	if message.AttemptNo() != 1 ||
+	investigationID := "10000000-0000-4000-8000-000000000091"
+	if message.AttemptNo() != 1 || message.InvestigationID() != investigationID ||
 		message.AggregateID() != "20000000-0000-4000-8000-000000000091" ||
 		message.Operation() != SourceSearchSubjectOperation ||
 		message.OutboxID() != "30000000-0000-4000-8000-000000000091" {
 		t.Fatalf("prepared message identity = %#v", message)
 	}
-	if _, err := registry.ValidateMessage([]byte(message.JSONPayload())); err != nil {
+	validated, err := registry.ValidateMessage([]byte(message.JSONPayload()))
+	if err != nil {
 		t.Fatalf("factory payload is not contract-valid: %v", err)
+	}
+	envelope, err := Decode[SourceCollectRequestedPayload](validated, SourceCollectRequestedType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := envelope.Payload
+	if envelope.Type != SourceCollectRequestedType || envelope.SchemaVersion != 1 ||
+		envelope.MessageID != message.OutboxID() || envelope.CorrelationID != investigationID ||
+		envelope.RootCommandID != message.OutboxID() || !envelope.OccurredAt.Equal(now) ||
+		payload.JobID != message.AggregateID() || payload.AttemptNo != 1 ||
+		payload.InvestigationID != investigationID || payload.Source != "fixture" ||
+		payload.Operation != SourceSearchSubjectOperation || payload.Purpose != "subject_discovery" ||
+		payload.Query.Type != "person" || payload.Query.Name == nil || *payload.Query.Name != name ||
+		payload.Limits != (CollectLimits{MaxRecords: 50, MaxBytes: 1 << 20, TimeoutSeconds: 30}) ||
+		!payload.Deadline.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("unexpected command: %#v", envelope)
 	}
 }
 
 func TestPrepareSourceCollectRequestedMessage(t *testing.T) {
 	registry, envelope := sourceCollectRequestedFixture(t)
 	expected := SourceCollectRequestedIdentity{
-		MessageID: envelope.MessageID,
-		JobID:     envelope.Payload.JobID,
-		AttemptNo: envelope.Payload.AttemptNo,
+		MessageID:       envelope.MessageID,
+		JobID:           envelope.Payload.JobID,
+		InvestigationID: envelope.Payload.InvestigationID,
+		AttemptNo:       envelope.Payload.AttemptNo,
 	}
 
 	message, err := PrepareSourceCollectRequestedMessage(registry, envelope, expected)
@@ -58,6 +77,7 @@ func TestPrepareSourceCollectRequestedMessage(t *testing.T) {
 	if message.OutboxID() != expected.MessageID ||
 		message.MessageType() != SourceCollectRequestedType ||
 		message.AggregateID() != expected.JobID ||
+		message.InvestigationID() != expected.InvestigationID ||
 		message.AttemptNo() != expected.AttemptNo ||
 		message.JSONPayload() == "" {
 		t.Fatalf(
@@ -74,10 +94,16 @@ func TestPrepareSourceCollectRequestedMessage(t *testing.T) {
 func TestPrepareSourceCollectRequestedMessageRejectsInvalidInput(t *testing.T) {
 	registry, validEnvelope := sourceCollectRequestedFixture(t)
 	validExpected := SourceCollectRequestedIdentity{
-		MessageID: validEnvelope.MessageID,
-		JobID:     validEnvelope.Payload.JobID,
-		AttemptNo: validEnvelope.Payload.AttemptNo,
+		MessageID:       validEnvelope.MessageID,
+		JobID:           validEnvelope.Payload.JobID,
+		InvestigationID: validEnvelope.Payload.InvestigationID,
+		AttemptNo:       validEnvelope.Payload.AttemptNo,
 	}
+	otherID := "99999999-9999-4999-8999-999999999999"
+	otherMessage, otherJob, otherAttempt := validExpected, validExpected, validExpected
+	otherMessage.MessageID = otherID
+	otherJob.JobID = otherID
+	otherAttempt.AttemptNo++
 
 	tests := []struct {
 		name     string
@@ -86,9 +112,16 @@ func TestPrepareSourceCollectRequestedMessageRejectsInvalidInput(t *testing.T) {
 		expected SourceCollectRequestedIdentity
 	}{
 		{name: "missing registry", envelope: validEnvelope, expected: validExpected},
-		{name: "different message id", registry: registry, envelope: validEnvelope, expected: SourceCollectRequestedIdentity{MessageID: "99999999-9999-4999-8999-999999999999", JobID: validExpected.JobID, AttemptNo: validExpected.AttemptNo}},
-		{name: "contract-valid different job", registry: registry, envelope: validEnvelope, expected: SourceCollectRequestedIdentity{MessageID: validExpected.MessageID, JobID: "99999999-9999-4999-8999-999999999999", AttemptNo: validExpected.AttemptNo}},
-		{name: "contract-valid different attempt", registry: registry, envelope: validEnvelope, expected: SourceCollectRequestedIdentity{MessageID: validExpected.MessageID, JobID: validExpected.JobID, AttemptNo: validExpected.AttemptNo + 1}},
+		{name: "different message id", registry: registry, envelope: validEnvelope, expected: otherMessage},
+		{name: "contract-valid different job", registry: registry, envelope: validEnvelope, expected: otherJob},
+		{name: "contract-valid different attempt", registry: registry, envelope: validEnvelope, expected: otherAttempt},
+		{name: "different correlation", registry: registry, envelope: withRequestedEnvelopeMutation(validEnvelope, func(value *Envelope[SourceCollectRequestedPayload]) {
+			value.CorrelationID = otherID
+		}), expected: validExpected},
+		{name: "different investigation", registry: registry, envelope: withRequestedEnvelopeMutation(validEnvelope, func(value *Envelope[SourceCollectRequestedPayload]) {
+			value.CorrelationID = otherID
+			value.Payload.InvestigationID = otherID
+		}), expected: validExpected},
 		{name: "wrong type", registry: registry, envelope: withRequestedEnvelopeMutation(validEnvelope, func(value *Envelope[SourceCollectRequestedPayload]) { value.Type = SourceCollectFailedType }), expected: validExpected},
 		{name: "wrong schema version", registry: registry, envelope: withRequestedEnvelopeMutation(validEnvelope, func(value *Envelope[SourceCollectRequestedPayload]) { value.SchemaVersion = 2 }), expected: validExpected},
 		{name: "schema-invalid source", registry: registry, envelope: withRequestedEnvelopeMutation(validEnvelope, func(value *Envelope[SourceCollectRequestedPayload]) { value.Payload.Source = "" }), expected: validExpected},

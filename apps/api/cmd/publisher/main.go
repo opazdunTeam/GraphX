@@ -169,6 +169,9 @@ func deferredReason(err error) string {
 	if errors.Is(err, outbox.ErrLeaseLost) {
 		return "lease_lost"
 	}
+	if errors.Is(err, outbox.ErrProcessingTimeout) {
+		return "processing_timeout"
+	}
 	return "delivery_failed"
 }
 

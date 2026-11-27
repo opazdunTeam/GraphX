@@ -18,6 +18,7 @@ const sourceCollectRequestedType = "source.collect.requested.v1"
 const maximumSafeJSONInteger int64 = 1<<53 - 1
 
 var ErrLeaseLost = errors.New("outbox lease lost")
+var ErrProcessingTimeout = errors.New("outbox processing exceeded the lease budget")
 
 type Message struct {
 	ID              string
@@ -87,6 +88,18 @@ func NewPublisher(store Store, broker Broker, config Config) (*Publisher, error)
 }
 
 func (p *Publisher) PublishOne(ctx context.Context) (PublishResult, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, p.config.LeaseDuration, ErrProcessingTimeout)
+	defer cancel()
+
+	result, err := p.publishOne(ctx)
+	if errors.Is(err, context.DeadlineExceeded) && errors.Is(context.Cause(ctx), ErrProcessingTimeout) {
+		result.RetryAfter = 0
+		return result, &DeferredError{Cause: ErrProcessingTimeout}
+	}
+	return result, err
+}
+
+func (p *Publisher) publishOne(ctx context.Context) (PublishResult, error) {
 	var result PublishResult
 	message, err := p.store.Claim(ctx, p.config.LeaseDuration)
 	if err != nil {

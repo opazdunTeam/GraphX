@@ -100,7 +100,7 @@ func startPublisherMetricsServer(
 	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.New("cannot listen on PUBLISHER_METRICS_ADDR")
 	}
 	server := &http.Server{
 		Addr:              listener.Addr().String(),

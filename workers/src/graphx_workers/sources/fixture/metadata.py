@@ -4,6 +4,7 @@ from graphx_workers.sdk import AdapterMetadata
 
 SOURCE_CODE = "fixture"
 SUPPORTED_OPERATION = "search_subject"
+LEGACY_COLLECT_OPERATION = "collect"
 SUPPORTED_ENTITY_TYPE = "person"
 FIXTURE_CASE_IDENTIFIER = "fixture_case"
 
@@ -19,5 +20,5 @@ PERSON_LOCAL_REF = "person:1"
 ADAPTER_METADATA = AdapterMetadata(
     source=SOURCE_CODE,
     version=ADAPTER_VERSION,
-    supported_operations=frozenset({SUPPORTED_OPERATION}),
+    supported_operations=frozenset({SUPPORTED_OPERATION, LEGACY_COLLECT_OPERATION}),
 )

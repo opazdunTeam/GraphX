@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -203,15 +204,21 @@ func TestLoadPublisherRequiresValidRabbitMQURL(t *testing.T) {
 }
 
 func TestLoadPublisherRejectsInvalidMetricsAddress(t *testing.T) {
-	tests := []string{"", "9091", "localhost", "127.0.0.1:service", "127.0.0.1:65536"}
+	const privateMarker = "private-metrics-marker"
+	tests := []string{"", "9091", "localhost", "127.0.0.1:service", "127.0.0.1:65536",
+		"http://user:" + privateMarker + "@localhost:9091"}
 	for _, address := range tests {
 		t.Run(address, func(t *testing.T) {
 			cleanAPIEnv(t)
 			t.Setenv("POSTGRES_DSN", "postgres://graphx:secret@localhost:5432/graphx")
 			t.Setenv("RABBITMQ_URL", "amqp://graphx:secret@rabbitmq:5672/graphx")
 			t.Setenv("PUBLISHER_METRICS_ADDR", address)
-			if _, err := LoadPublisher(); err == nil {
+			_, err := LoadPublisher()
+			if err == nil {
 				t.Fatal("LoadPublisher() error = nil, want metrics address validation error")
+			}
+			if strings.Contains(err.Error(), privateMarker) {
+				t.Fatal("LoadPublisher() error exposed the configured address")
 			}
 		})
 	}

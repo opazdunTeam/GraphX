@@ -57,6 +57,9 @@ func TestDeferredReasonClassifiesLeaseLossWithoutRenderingCause(t *testing.T) {
 	if got := deferredReason(&outbox.DeferredError{Cause: outbox.ErrLeaseLost}); got != "lease_lost" {
 		t.Fatalf("deferredReason(lease lost) = %q", got)
 	}
+	if got := deferredReason(&outbox.DeferredError{Cause: outbox.ErrProcessingTimeout}); got != "processing_timeout" {
+		t.Fatalf("deferredReason(processing timeout) = %q", got)
+	}
 	if got := deferredReason(errors.New("payload marker must stay private")); got != "delivery_failed" {
 		t.Fatalf("deferredReason(other) = %q", got)
 	}

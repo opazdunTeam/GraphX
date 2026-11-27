@@ -88,7 +88,7 @@ flowchart LR
 
 `outbox_messages` хранит сообщения, которые нужно опубликовать после транзакции. `lease_token` и `lease_until` обозначают временную аренду строки конкретным publisher: PostgreSQL выдаёт доступные записи через `FOR UPDATE SKIP LOCKED`, а другой процесс может забрать запись только после истечения аренды. Успешная отправка фиксируется в `published_at` только после RabbitMQ confirm; при временной ошибке обновляются только счётчик попыток, `available_at` и `last_error`, бизнес-состояние задания не меняется.
 
-`consumed_messages` защищает consumer по паре `consumer_name + message_id` и является append-only до появления отдельной retention policy. Business payload outbox неизменяем, а после публикации неизменяема вся строка.
+`consumed_messages` защищает consumer по паре `consumer_name + message_id` и является append-only до появления отдельной retention policy. В outbox неизменяемы business payload и его текстовое представление PostgreSQL, которое publisher отправляет в RabbitMQ в UTF-8. После публикации неизменяема вся строка.
 
 `source_job_results` - запись результата одной попытки. Пара `(source_job_id, attempt_no)` уникальна и допускает не больше одного принятого business result независимо от количества RabbitMQ deliveries и `message_id`. Таблица хранит исходный `message_id`, канонический digest payload, `applied` и причину игнорирования. Для completed consumer сверяет переданный worker digest со своим расчётом; для failed, где digest не передаётся транспортом, consumer рассчитывает его сам по каноническому payload. Повтор той же попытки с тем же digest не применяется повторно, а другой digest для уже принятой попытки считается конфликтом контракта и не заменяет сохранённый результат.
 

@@ -57,6 +57,41 @@ func TestPublishOneWaitsForBrokerConfirmationBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestPublishOneBoundsCompletionAfterConfirmation(t *testing.T) {
+	store := &blockedCompletionStore{testStore: testStore{message: &Message{
+		ID: testMessageID, Type: sourceCollectRequestedType,
+		AggregateType: "source_job", AggregateID: testJobID,
+		Payload: []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1}}`),
+	}}}
+	broker := &testBroker{}
+	cfg := DefaultConfig()
+	cfg.LeaseDuration = 100 * time.Millisecond
+	publisher, err := NewPublisher(store, broker, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	result, err := publisher.PublishOne(ctx)
+	if !IsDeferred(err) || !errors.Is(err, ErrProcessingTimeout) || ctx.Err() != nil {
+		t.Fatalf("PublishOne() error = %v, parent context error = %v, want lease deadline", err, ctx.Err())
+	}
+	if !broker.published || !result.Processed || result.Published || store.rescheduled {
+		t.Fatalf("confirmation timeout state = broker %t, result %#v, rescheduled %t",
+			broker.published, result, store.rescheduled)
+	}
+}
+
+type blockedCompletionStore struct {
+	testStore
+}
+
+func (s *blockedCompletionStore) MarkPublished(ctx context.Context, _ Message, _ int) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (s *testStore) Claim(_ context.Context, lease time.Duration) (*Message, error) {
 	s.claimedLease = lease
 	if s.message == nil {
@@ -137,7 +172,7 @@ func TestPublishOneDefersFailedDeliveryWithoutMarkingPublished(t *testing.T) {
 		ID: testMessageID, Type: "source.collect.requested.v1",
 		AggregateType: "source_job", AggregateID: testJobID,
 		PublishAttempts: 2,
-		Payload:         []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","payload":{"job_id":"` + testJobID + `","attempt_no":1}}`),
+		Payload:         []byte(`{"message_id":"` + testMessageID + `","type":"source.collect.requested.v1","correlation_id":"` + testInvestigationID + `","payload":{"job_id":"` + testJobID + `","investigation_id":"` + testInvestigationID + `","attempt_no":1}}`),
 	}}
 	broker := &testBroker{publishErr: errors.New("confirm was not received")}
 	publisher, err := NewPublisher(store, broker, DefaultConfig())
@@ -149,8 +184,9 @@ func TestPublishOneDefersFailedDeliveryWithoutMarkingPublished(t *testing.T) {
 	if !result.Processed || !IsDeferred(err) {
 		t.Fatalf("PublishOne() = %#v, %v; want processed and deferred error", result, err)
 	}
-	if store.published || !store.rescheduled {
-		t.Fatalf("published/rescheduled = %t/%t, want false/true", store.published, store.rescheduled)
+	if !broker.published || store.published || !store.rescheduled || !errors.Is(err, broker.publishErr) {
+		t.Fatalf("broker called = %t, published = %t, rescheduled = %t, error = %v",
+			broker.published, store.published, store.rescheduled, err)
 	}
 	if store.retryDelay != 4*time.Second {
 		t.Fatalf("retry delay = %s, want 4s", store.retryDelay)

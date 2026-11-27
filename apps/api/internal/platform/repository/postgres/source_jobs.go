@@ -27,6 +27,9 @@ func (s *Store) Create(ctx context.Context, job orchestration.CreateJob, message
 	if err := validateOutboxMessage(message, job.ID, 1); err != nil {
 		return fmt.Errorf("validate source job outbox message: %w", err)
 	}
+	if !strings.EqualFold(message.InvestigationID(), job.InvestigationID) {
+		return errors.New("source job investigation does not match outbox investigation")
+	}
 	if message.Operation() != job.Operation {
 		return fmt.Errorf("source job operation %q does not match outbox operation %q",
 			job.Operation, message.Operation())
@@ -106,15 +109,18 @@ func (s *Store) StartNewAttempt(
 
 	return s.WithinTransaction(ctx, func(txStore *Store) error {
 		var status orchestration.Status
-		var operation string
+		var operation, investigationID string
 		var oldAttempt, maxAttempts int
 		if err := txStore.db.QueryRow(ctx, `
-			select status, operation, attempt_no, max_attempts
+			select status, operation, investigation_id::text, attempt_no, max_attempts
 			from source_jobs
 			where id = $1
 			for update
-		`, jobID).Scan(&status, &operation, &oldAttempt, &maxAttempts); err != nil {
+		`, jobID).Scan(&status, &operation, &investigationID, &oldAttempt, &maxAttempts); err != nil {
 			return fmt.Errorf("lock source job: %w", err)
+		}
+		if !strings.EqualFold(message.InvestigationID(), investigationID) {
+			return errors.New("source job investigation does not match retry outbox investigation")
 		}
 		if message.Operation() != operation {
 			return fmt.Errorf("retry outbox operation %q does not match source job operation %q",

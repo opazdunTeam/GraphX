@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
@@ -11,28 +12,31 @@ import (
 )
 
 type SourceCollectRequestedIdentity struct {
-	MessageID string
-	JobID     string
-	AttemptNo int
+	MessageID       string
+	JobID           string
+	InvestigationID string
+	AttemptNo       int
 }
 
 type PreparedOutboxMessage struct {
-	id          string
-	messageType string
-	aggregateID string
-	operation   string
-	attemptNo   int
-	payloadJSON string
+	id              string
+	messageType     string
+	aggregateID     string
+	investigationID string
+	operation       string
+	attemptNo       int
+	payloadJSON     string
 }
 
 var _ orchestration.OutboxMessage = PreparedOutboxMessage{}
 
-func (m PreparedOutboxMessage) OutboxID() string    { return m.id }
-func (m PreparedOutboxMessage) MessageType() string { return m.messageType }
-func (m PreparedOutboxMessage) AggregateID() string { return m.aggregateID }
-func (m PreparedOutboxMessage) Operation() string   { return m.operation }
-func (m PreparedOutboxMessage) AttemptNo() int      { return m.attemptNo }
-func (m PreparedOutboxMessage) JSONPayload() string { return m.payloadJSON }
+func (m PreparedOutboxMessage) OutboxID() string        { return m.id }
+func (m PreparedOutboxMessage) MessageType() string     { return m.messageType }
+func (m PreparedOutboxMessage) AggregateID() string     { return m.aggregateID }
+func (m PreparedOutboxMessage) InvestigationID() string { return m.investigationID }
+func (m PreparedOutboxMessage) Operation() string       { return m.operation }
+func (m PreparedOutboxMessage) AttemptNo() int          { return m.attemptNo }
+func (m PreparedOutboxMessage) JSONPayload() string     { return m.payloadJSON }
 
 type SourceCollectOutboxFactory struct {
 	registry *SchemaRegistry
@@ -89,9 +93,10 @@ func (f *SourceCollectOutboxFactory) PrepareSourceCollect(
 		f.registry,
 		envelope,
 		SourceCollectRequestedIdentity{
-			MessageID: outboxID,
-			JobID:     jobID,
-			AttemptNo: 1,
+			MessageID:       outboxID,
+			JobID:           jobID,
+			InvestigationID: investigationID,
+			AttemptNo:       1,
 		},
 	)
 }
@@ -128,6 +133,10 @@ func PrepareSourceCollectRequestedMessage(
 			decoded.Payload.JobID, expected.JobID,
 		)
 	}
+	if !strings.EqualFold(decoded.Payload.InvestigationID, expected.InvestigationID) ||
+		!strings.EqualFold(decoded.CorrelationID, expected.InvestigationID) {
+		return PreparedOutboxMessage{}, errors.New("source collect request investigation identity mismatch")
+	}
 	if decoded.Payload.AttemptNo != expected.AttemptNo {
 		return PreparedOutboxMessage{}, fmt.Errorf(
 			"payload attempt_no %d does not match expected %d",
@@ -135,11 +144,12 @@ func PrepareSourceCollectRequestedMessage(
 		)
 	}
 	return PreparedOutboxMessage{
-		id:          decoded.MessageID,
-		messageType: validated.Type,
-		aggregateID: decoded.Payload.JobID,
-		operation:   decoded.Payload.Operation,
-		attemptNo:   decoded.Payload.AttemptNo,
-		payloadJSON: string(validated.Raw),
+		id:              decoded.MessageID,
+		messageType:     validated.Type,
+		aggregateID:     decoded.Payload.JobID,
+		investigationID: decoded.Payload.InvestigationID,
+		operation:       decoded.Payload.Operation,
+		attemptNo:       decoded.Payload.AttemptNo,
+		payloadJSON:     string(validated.Raw),
 	}, nil
 }

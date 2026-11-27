@@ -41,7 +41,6 @@ func (s *OutboxStore) Claim(ctx context.Context, leaseDuration time.Duration) (*
 	}
 	leaseToken := token.String()
 	var message outbox.Message
-	var payload string
 	err = tx.QueryRow(ctx, `
 		with candidate as (
 			select id
@@ -63,7 +62,7 @@ func (s *OutboxStore) Claim(ctx context.Context, leaseDuration time.Duration) (*
 			message.message_type,
 			message.aggregate_type,
 			message.aggregate_id::text,
-			message.payload::text,
+			convert_to(message.payload::text, 'UTF8'),
 			message.publish_attempts,
 			message.lease_token::text
 	`, leaseToken, leaseMillis).Scan(
@@ -71,7 +70,7 @@ func (s *OutboxStore) Claim(ctx context.Context, leaseDuration time.Duration) (*
 		&message.Type,
 		&message.AggregateType,
 		&message.AggregateID,
-		&payload,
+		&message.Payload,
 		&message.PublishAttempts,
 		&message.LeaseToken,
 	)
@@ -88,7 +87,6 @@ func (s *OutboxStore) Claim(ctx context.Context, leaseDuration time.Duration) (*
 		return nil, fmt.Errorf("commit outbox claim: %w", err)
 	}
 
-	message.Payload = []byte(payload)
 	return &message, nil
 }
 

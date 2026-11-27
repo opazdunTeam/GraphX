@@ -57,7 +57,7 @@ from graphx_workers.sources.fixture import (
     SUPPORTED_OPERATION,
     FixtureAdapter,
 )
-from graphx_workers.sources.fixture.metadata import RAW_ARTIFACT_LOCAL_REF
+from graphx_workers.sources.fixture.metadata import LEGACY_COLLECT_OPERATION, RAW_ARTIFACT_LOCAL_REF
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = ROOT / "contracts" / "schemas"
@@ -175,7 +175,9 @@ def request(fixture_case: str = "success") -> CollectRequest:
     )
 
 
-def command(fixture_case: str = "success") -> SourceCollectRequested:
+def command(
+    fixture_case: str = "success", *, operation: str = SUPPORTED_OPERATION
+) -> SourceCollectRequested:
     return SourceCollectRequested(
         message_id=COMMAND_ID,
         type="source.collect.requested.v1",
@@ -190,7 +192,7 @@ def command(fixture_case: str = "success") -> SourceCollectRequested:
             attempt_no=1,
             investigation_id=CORRELATION_ID,
             source=SOURCE_CODE,
-            operation=SUPPORTED_OPERATION,
+            operation=operation,
             purpose="subject_discovery",
             query=request(fixture_case).query,
             limits=CollectLimits(max_records=10, max_bytes=1024, timeout_seconds=30),
@@ -224,7 +226,9 @@ def test_fixture_registration_uses_immutable_adapter_metadata() -> None:
 
     assert registration.source == SOURCE_CODE
     assert registration.version == ADAPTER_VERSION
-    assert registration.metadata.supported_operations == frozenset({SUPPORTED_OPERATION})
+    assert registration.metadata.supported_operations == frozenset(
+        {SUPPORTED_OPERATION, LEGACY_COLLECT_OPERATION}
+    )
 
     adapter.metadata = AdapterMetadata(
         source="changed",
@@ -571,15 +575,21 @@ async def test_manifest_finalizer_rejects_unregistered_adapter_artifact() -> Non
 
 
 @pytest.mark.asyncio
-async def test_fixture_runtime_replays_exact_bytes_without_reexecution() -> None:
+@pytest.mark.parametrize("operation", [SUPPORTED_OPERATION, LEGACY_COLLECT_OPERATION])
+async def test_fixture_runtime_replays_exact_bytes_without_reexecution(operation: str) -> None:
     registry = ContractSchemaRegistry(SCHEMA_ROOT)
     context_factory = RecordingContextFactory()
     runtime = processor(registry, context_factory)
-    raw = command().model_dump_json().encode()
+    raw = command(operation=operation).model_dump_json().encode()
 
     first = await runtime.prepare(raw)
     duplicate = await runtime.prepare(raw)
 
+    result = parse_source_message(registry.validate_message_json(first.body))
+    assert isinstance(result, SourceCollectCompleted)
+    assert result.causation_id == COMMAND_ID
+    assert result.payload.job_id == JOB_ID
+    assert result.payload.attempt_no == 1
     assert duplicate == first
     assert duplicate.body == first.body
     assert context_factory.calls == 1

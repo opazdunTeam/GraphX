@@ -326,6 +326,7 @@ func (s *InvestigationStore) Create(
 		}
 		message := initialJob.Outbox
 		if message.AggregateID() != jobID.String() ||
+			!strings.EqualFold(message.InvestigationID(), investigationID.String()) ||
 			strings.TrimSpace(message.Operation()) == "" ||
 			message.AttemptNo() != 1 {
 			return investigations.Accepted{}, fmt.Errorf("prepared source collect identity or operation mismatch")
