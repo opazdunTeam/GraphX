@@ -43,14 +43,14 @@ func (s *InvestigationStore) CheckIdempotency(
 	var storedHash string
 	var responseStatus *int
 	var responseBody []byte
-	var expiresAt time.Time
+	var expired bool
 	err = tx.QueryRow(ctx, `
-		select request_hash, response_status, response_body, expires_at
+		select request_hash, response_status, response_body, expires_at <= now()
 		from api_idempotency_keys
 		where scope = $1 and idempotency_key = $2
 		for update
 	`, investigationIdempotencyScope, key).Scan(
-		&storedHash, &responseStatus, &responseBody, &expiresAt,
+		&storedHash, &responseStatus, &responseBody, &expired,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.Commit(ctx); err != nil {
@@ -61,7 +61,7 @@ func (s *InvestigationStore) CheckIdempotency(
 	if err != nil {
 		return investigations.Accepted{}, false, fmt.Errorf("lock investigation idempotency: %w", err)
 	}
-	if expiresAt.Before(time.Now()) {
+	if expired {
 		if err := tx.Commit(ctx); err != nil {
 			return investigations.Accepted{}, false, fmt.Errorf("commit expired idempotency lookup: %w", err)
 		}
@@ -215,19 +215,19 @@ func (s *InvestigationStore) Create(
 	var storedHash string
 	var responseStatus *int
 	var responseBody []byte
-	var expiresAt time.Time
+	var expired bool
 	err = tx.QueryRow(ctx, `
-		select request_hash, response_status, response_body, expires_at
+		select request_hash, response_status, response_body, expires_at <= now()
 		from api_idempotency_keys
 		where scope = $1 and idempotency_key = $2
 		for update
 	`, investigationIdempotencyScope, command.IdempotencyKey).Scan(
-		&storedHash, &responseStatus, &responseBody, &expiresAt,
+		&storedHash, &responseStatus, &responseBody, &expired,
 	)
 	if err != nil {
 		return investigations.Accepted{}, fmt.Errorf("lock investigation idempotency: %w", err)
 	}
-	if !newKey && expiresAt.Before(time.Now()) {
+	if !newKey && expired {
 		if _, err := tx.Exec(ctx, `
 			delete from api_idempotency_keys
 			where scope = $1 and idempotency_key = $2

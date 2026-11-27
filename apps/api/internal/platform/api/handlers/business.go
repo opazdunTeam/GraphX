@@ -178,7 +178,7 @@ func (h *Handler) CreateInvestigation(
 }
 
 func subjectFromGenerated(input generated.SubjectInput) (investigations.Subject, error) {
-	if named, err := input.AsNamedSubjectInput(); err == nil {
+	if named, err := input.AsNamedSubjectInput(); err == nil && named.Name != "" {
 		identifiers := copyIdentifierPointer(named.Identifiers)
 		return investigations.Subject{
 			Type:        string(named.Type),

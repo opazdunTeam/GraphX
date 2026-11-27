@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,6 +159,57 @@ func TestInvestigationCreationStoreIsIdempotentAndTransactional(t *testing.T) {
 	}
 	if investigationCount < 1 {
 		t.Fatal("investigation was not created")
+	}
+
+	concurrentCommand := command
+	concurrentCommand.IdempotencyKey = "00000000-0000-4000-8000-000000000092"
+	var group sync.WaitGroup
+	results := make(chan investigations.Accepted, 8)
+	errorsFound := make(chan error, 8)
+	for range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			result, err := creator.Create(ctx, concurrentCommand)
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	group.Wait()
+	close(results)
+	close(errorsFound)
+	for err := range errorsFound {
+		t.Errorf("concurrent Create() error = %v", err)
+	}
+	var first investigations.Accepted
+	for result := range results {
+		if first.ID == "" {
+			first = result
+		} else if result != first {
+			t.Errorf("concurrent result = %#v, want %#v", result, first)
+		}
+	}
+
+	rollbackCommand := command
+	rollbackCommand.IdempotencyKey = "00000000-0000-4000-8000-000000000093"
+	rollbackCommand.InvestigationID = "10000000-0000-4000-8000-000000000093"
+	rollbackCommand.InitialJobs = append([]investigations.InitialJob(nil), command.InitialJobs...)
+	rollbackCommand.InitialJobs[0].JobID = "20000000-0000-4000-8000-000000000093"
+	if _, err := store.Create(ctx, rollbackCommand, sources); err == nil {
+		t.Fatal("Create(mismatched prepared job) succeeded")
+	}
+	var residualRows int
+	if err := pool.QueryRow(ctx, `
+		select (select count(*) from investigations where id = $1)
+		+ (select count(*) from api_idempotency_keys where scope = 'investigation' and idempotency_key = $2)
+	`, rollbackCommand.InvestigationID, rollbackCommand.IdempotencyKey).Scan(&residualRows); err != nil {
+		t.Fatal(err)
+	}
+	if residualRows != 0 {
+		t.Fatalf("rolled-back rows = %d, want 0", residualRows)
 	}
 }
 

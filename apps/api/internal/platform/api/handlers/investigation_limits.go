@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
 )
@@ -50,7 +51,7 @@ func (h *Handler) ResolveInvestigationLimits(input *generated.InvestigationLimit
 		}
 		seen := make(map[string]struct{}, len(*input.Sources))
 		for _, source := range *input.Sources {
-			if source == "" {
+			if source == "" || strings.ContainsRune(source, 0) {
 				return InvestigationLimits{}, fmt.Errorf("sources must not contain empty values")
 			}
 			if _, exists := seen[source]; exists {

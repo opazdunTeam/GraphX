@@ -9,10 +9,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/contractjson"
+	"github.com/opazdunTeam/GraphX/apps/api/internal/investigations"
 	"github.com/opazdunTeam/GraphX/apps/api/internal/platform/api/generated"
 )
 
@@ -50,9 +52,18 @@ func (h *Handler) bindCreateInvestigationRequest(c *gin.Context) (createInvestig
 		return createInvestigationInput{}, fmt.Errorf("decode request body: %w", err)
 	}
 	requestHash := sha256.Sum256(canonicalBody)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(canonicalBody, &fields); err != nil {
+		return createInvestigationInput{}, err
+	}
+	for key := range fields {
+		if key != "subject" && key != "limits" {
+			return createInvestigationInput{}, fmt.Errorf("unknown request field")
+		}
+	}
 
 	var request createInvestigationRequest
-	decoder := json.NewDecoder(bytes.NewReader(rawBody))
+	decoder := json.NewDecoder(bytes.NewReader(canonicalBody))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		return createInvestigationInput{}, fmt.Errorf("decode request body: %w", err)
@@ -63,6 +74,13 @@ func (h *Handler) bindCreateInvestigationRequest(c *gin.Context) (createInvestig
 
 	subject, err := validateSubjectInput(request.Subject)
 	if err != nil {
+		return createInvestigationInput{}, err
+	}
+	domainSubject, err := subjectFromGenerated(subject)
+	if err != nil {
+		return createInvestigationInput{}, err
+	}
+	if _, err := investigations.NormalizeSubject(domainSubject); err != nil {
 		return createInvestigationInput{}, err
 	}
 
@@ -133,6 +151,9 @@ func validateSubjectInput(raw json.RawMessage) (generated.SubjectInput, error) {
 			return generated.SubjectInput{}, fmt.Errorf("subject name must be a string")
 		}
 		nameLength := utf8.RuneCountInString(name)
+		if strings.ContainsRune(name, 0) {
+			return generated.SubjectInput{}, fmt.Errorf("subject name contains a null character")
+		}
 		if nameLength == 0 || nameLength > maxSubjectNameLength {
 			return generated.SubjectInput{}, fmt.Errorf("subject name length must be between 1 and %d", maxSubjectNameLength)
 		}
@@ -162,7 +183,7 @@ func validateSubjectIdentifiers(raw json.RawMessage) error {
 		return fmt.Errorf("subject identifiers must contain at least one property")
 	}
 	for name, value := range identifiers {
-		if name == "" || value == "" {
+		if name == "" || value == "" || strings.ContainsRune(name, 0) || strings.ContainsRune(value, 0) {
 			return fmt.Errorf("subject identifier names and values must not be empty")
 		}
 	}
@@ -175,6 +196,18 @@ func decodeInvestigationLimits(raw json.RawMessage) (*generated.InvestigationLim
 	}
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, fmt.Errorf("limits must be an object")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range fields {
+		if key != "depth" && key != "entity_limit" && key != "sources" {
+			return nil, fmt.Errorf("unknown limits field")
+		}
+		if bytes.Equal(value, []byte("null")) {
+			return nil, fmt.Errorf("limits fields must not be null")
+		}
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))

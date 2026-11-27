@@ -92,6 +92,16 @@ func TestBindCreateInvestigationRequestRejectsContractViolations(t *testing.T) {
 		{name: "unknown type", body: `{"subject":{"type":"company","name":"Ada"}}`},
 		{name: "missing name and identifiers", body: `{"subject":{"type":"person"}}`},
 		{name: "empty name", body: `{"subject":{"type":"person","name":""}}`},
+		{name: "blank name", body: `{"subject":{"type":"person","name":"  "}}`},
+		{name: "null character", body: `{"subject":{"type":"person","name":"A\u0000"}}`},
+		{name: "case alias subject", body: `{"Subject":{"type":"person","name":"Ada"}}`},
+		{name: "case alias limit", body: `{"subject":{"type":"person","name":"Ada"},"limits":{"Depth":1}}`},
+		{name: "null depth", body: `{"subject":{"type":"person","name":"Ada"},"limits":{"depth":null}}`},
+		{name: "null entity limit", body: `{"subject":{"type":"person","name":"Ada"},"limits":{"entity_limit":null}}`},
+		{name: "null sources", body: `{"subject":{"type":"person","name":"Ada"},"limits":{"sources":null}}`},
+		{name: "null character source", body: `{"subject":{"type":"person","name":"Ada"},"limits":{"sources":["fixture\u0000"]}}`},
+		{name: "blank identifier", body: `{"subject":{"type":"person","identifiers":{"id":"  "}}}`},
+		{name: "normalized identifier conflict", body: `{"subject":{"type":"person","identifiers":{"ID":"1","id":"2"}}}`},
 		{
 			name: "name too long",
 			body: fmt.Sprintf(`{"subject":{"type":"person","name":"%s"}}`, strings.Repeat("я", 501)),
@@ -123,6 +133,34 @@ func TestBindCreateInvestigationRequestRequiresJSONContentType(t *testing.T) {
 	_, err := investigationHandler().bindCreateInvestigationRequest(context)
 	if !errors.Is(err, errUnsupportedMediaType) {
 		t.Fatalf("bindCreateInvestigationRequest() error = %v, want unsupported media type", err)
+	}
+}
+
+func TestSubjectFromGeneratedPreservesIdentifierOnlyInput(t *testing.T) {
+	context := createInvestigationContext(`{"subject":{"type":"organization","identifiers":{"registration_number":"42"}}}`, "application/json")
+	input, err := investigationHandler().bindCreateInvestigationRequest(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := subjectFromGenerated(input.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.Name != nil || subject.Identifiers["registration_number"] != "42" {
+		t.Fatalf("subject = %#v", subject)
+	}
+	if _, err := investigations.NormalizeSubject(subject); err != nil {
+		t.Fatalf("NormalizeSubject() error = %v", err)
+	}
+}
+
+func TestCreateInvestigationAcceptsIntegralNumberRepresentations(t *testing.T) {
+	for _, number := range []string{"1", "1.0", "1e0"} {
+		context := createInvestigationContext(`{"subject":{"type":"person","name":"Ada"},"limits":{"depth":`+number+`}}`, "application/json")
+		input, err := investigationHandler().bindCreateInvestigationRequest(context)
+		if err != nil || input.Limits.Depth != 1 {
+			t.Fatalf("depth %s: input = %#v, error = %v", number, input, err)
+		}
 	}
 }
 
