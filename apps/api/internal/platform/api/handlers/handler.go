@@ -15,23 +15,30 @@ type readinessChecker interface {
 	Ping(context.Context) error
 }
 
+type sourceCatalogReader interface {
+	ListSources(context.Context) ([]investigations.CatalogSource, error)
+}
+
 type Handler struct {
 	readiness        readinessChecker
 	readinessTimeout time.Duration
 	investigation    config.Investigation
 	create           investigations.CreateUseCase
+	sources          sourceCatalogReader
 }
 
 func New(
 	readiness readinessChecker,
 	readinessTimeout time.Duration,
 	investigation config.Investigation,
+	sources sourceCatalogReader,
 	creators ...investigations.CreateUseCase,
 ) *Handler {
 	handler := &Handler{
 		readiness:        readiness,
 		readinessTimeout: readinessTimeout,
 		investigation:    investigation,
+		sources:          sources,
 	}
 	if len(creators) > 0 {
 		handler.create = creators[0]

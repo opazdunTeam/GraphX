@@ -306,10 +306,3 @@ func (h *Handler) RevertReviewDecision(
 ) {
 	h.notImplemented(c)
 }
-
-func (h *Handler) ListSources(
-	c *gin.Context,
-	_ generated.ListSourcesParams,
-) {
-	h.notImplemented(c)
-}

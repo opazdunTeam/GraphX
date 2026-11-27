@@ -8,6 +8,8 @@ export {
   type CreateApiClientOptions,
 } from './client'
 export { ApiError, ApiProblemError } from './errors'
+export { createInvestigation, listSources } from './investigations'
+export { createUuid } from './uuid'
 export type {
   CreateInvestigationRequest,
   InvestigationAccepted,

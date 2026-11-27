@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiError, ApiProblemError, createApiClient } from '@/shared/api'
+import {
+  ApiError,
+  ApiProblemError,
+  createApiClient,
+  createUuid,
+} from '@/shared/api'
 
 function fetchMock(response: Response): ReturnType<typeof vi.fn<typeof fetch>> {
   return vi.fn<typeof fetch>().mockResolvedValue(response)
 }
 
 describe('API client', () => {
+  it('can generate UUIDs on a LAN HTTP connection', () => {
+    const browserCrypto = globalThis.crypto
+    vi.stubGlobal('crypto', {
+      getRandomValues: browserCrypto.getRandomValues.bind(browserCrypto),
+    })
+    try {
+      expect(createUuid()).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
   it('joins the base URL and sends controlled request headers and JSON', async () => {
     const request = fetchMock(
       new Response(JSON.stringify({ accepted: true }), {

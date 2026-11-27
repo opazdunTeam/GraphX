@@ -30,7 +30,7 @@ func testRouter(checker *readinessStub) http.Handler {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	handler := handlers.New(checker, 50*time.Millisecond, config.Investigation{
 		DefaultDepth: 1, MaxDepth: 2, DefaultEntityLimit: 50, MaxEntityLimit: 100,
-	})
+	}, nil)
 	return NewRouter(logger, handler)
 }
 

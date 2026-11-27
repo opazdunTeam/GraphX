@@ -29,6 +29,7 @@ export default tseslint.config(
       },
     },
     rules: {
+      'vue/html-self-closing': ['warn', { html: { void: 'always' } }],
       'vue/max-attributes-per-line': 'off',
       'vue/multi-word-component-names': 'off',
       'vue/singleline-html-element-content-newline': 'off',

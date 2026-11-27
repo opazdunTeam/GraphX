@@ -1,4 +1,5 @@
 import { ApiError } from './errors'
+import { createUuid } from './uuid'
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
@@ -9,6 +10,7 @@ export interface ApiRequestOptions<T> extends Omit<
   'body' | 'headers'
 > {
   headers?: HeadersInit
+  expectedStatus?: number
   idempotencyKey?: string
   json?: unknown
   parse?: ApiResponseParser<T>
@@ -117,8 +119,7 @@ export function createApiClient(
 ): ApiClient {
   const baseUrl = options.baseUrl ?? apiBaseUrl
   const fetchRequest = options.fetch ?? globalThis.fetch
-  const requestIdFactory =
-    options.requestIdFactory ?? (() => globalThis.crypto.randomUUID())
+  const requestIdFactory = options.requestIdFactory ?? createUuid
 
   return {
     async request<T>(
@@ -127,6 +128,7 @@ export function createApiClient(
     ): Promise<T> {
       const {
         headers: initialHeaders,
+        expectedStatus,
         idempotencyKey,
         json,
         parse,
@@ -153,6 +155,15 @@ export function createApiClient(
 
       if (!response.ok) {
         throw await responseError(response, requestId)
+      }
+      if (expectedStatus !== undefined && response.status !== expectedStatus) {
+        throw new ApiError({
+          status: response.status,
+          code: 'unexpected_response_status',
+          title: 'Неожиданный ответ API',
+          detail: 'Сервер не подтвердил выполнение запроса ожидаемым кодом.',
+          requestId: response.headers.get('X-Request-ID') ?? requestId,
+        })
       }
       if (parse) {
         return parse(response)
