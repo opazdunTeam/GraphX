@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '@/App.vue'
 import { router } from '@/app/router'
-import type { SourceCatalog } from '@/shared/api'
+import type { InvestigationStatus, SourceCatalog } from '@/shared/api'
 
 const request = vi.hoisted(() => {
   const mock = vi.fn<typeof fetch>()
@@ -98,6 +98,35 @@ describe('Запуск расследования', () => {
           accept = resolve
         }),
     )
+    const initialStatus: InvestigationStatus = {
+      id,
+      status: 'running',
+      stage: 'subject_discovery',
+      state_version: 1,
+      progress: { active_jobs: 1, terminal_jobs: 0, known_jobs: 1 },
+      partial_result: { succeeded_jobs: 0, sources_with_results: 0 },
+      sources: [
+        {
+          source_code: 'fixture',
+          status: 'pending',
+          active_job_count: 1,
+          terminal_job_count: 0,
+          known_job_count: 1,
+          succeeded_job_count: 0,
+          attempt_count: 1,
+          error_code: null,
+          error_detail: null,
+          next_attempt_at: null,
+          updated_at: '2026-11-27T00:00:00Z',
+        },
+      ],
+      requires_action: false,
+      pending_review_count: 0,
+      reviews_url: null,
+      source_actions: [],
+      updated_at: '2026-11-27T00:00:00Z',
+    }
+    request.mockResolvedValueOnce(Response.json(initialStatus))
     wrapper = mountApp()
     await flushPromises()
     expect(request.mock.calls[0]?.[0]).toBe('/api/v1/sources')
@@ -122,6 +151,12 @@ describe('Запуск расследования', () => {
     expect(router.currentRoute.value.path).toBe(path)
     expect(wrapper.get('h1').text()).toBe('Статус расследования')
     expect(wrapper.text()).toContain('Принято в работу')
+    expect(request.mock.calls.at(-1)?.[0]).toBe(`/api/v1${path}`)
+    expect(wrapper.text()).toContain('0 из 1 известных')
+    expect(wrapper.get('.source-status-list').text()).toContain(
+      'Ожидает запуска',
+    )
+    expect(wrapper.find('[role=alert]').exists()).toBe(false)
     expect(wrapper.text()).toContain(id)
   })
 
